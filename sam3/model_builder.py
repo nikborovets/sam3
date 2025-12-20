@@ -547,6 +547,38 @@ def _load_checkpoint(model, checkpoint_path):
         )
 
 
+# Local checkpoint lookup (avoids Hugging Face downloads)
+LOCAL_SAM3_DIR = os.path.join(os.sep, "workspace", "data_mount", "model_weights", "sam3")
+LOCAL_SAM3_CKPT_CANDIDATES = ("sam3.pt", "model.safetensors")
+
+
+def _find_local_checkpoint() -> Optional[str]:
+    """Return first existing local checkpoint path, if any."""
+    for filename in LOCAL_SAM3_CKPT_CANDIDATES:
+        candidate = os.path.join(LOCAL_SAM3_DIR, filename)
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def _resolve_checkpoint_path(checkpoint_path: Optional[str], load_from_HF: bool) -> str:
+    """Prefer local checkpoint; optionally fall back to HF if allowed."""
+    if checkpoint_path is not None:
+        return checkpoint_path
+
+    local_ckpt = _find_local_checkpoint()
+    if local_ckpt is not None:
+        return local_ckpt
+
+    if load_from_HF:
+        return download_ckpt_from_hf()
+
+    raise FileNotFoundError(
+        "SAM3 checkpoint not found locally. "
+        f"Tried: {[os.path.join(LOCAL_SAM3_DIR, f) for f in LOCAL_SAM3_CKPT_CANDIDATES]}"
+    )
+
+
 def _setup_device_and_mode(model, device, eval_mode):
     """Setup model device and evaluation mode."""
     if device == "cuda":
@@ -561,7 +593,7 @@ def build_sam3_image_model(
     device="cuda" if torch.cuda.is_available() else "cpu",
     eval_mode=True,
     checkpoint_path=None,
-    load_from_HF=True,
+    load_from_HF=False,
     enable_segmentation=True,
     enable_inst_interactivity=False,
     compile=False,
@@ -628,11 +660,11 @@ def build_sam3_image_model(
         inst_predictor,
         eval_mode,
     )
-    if load_from_HF and checkpoint_path is None:
-        checkpoint_path = download_ckpt_from_hf()
-    # Load checkpoint if provided
-    if checkpoint_path is not None:
-        _load_checkpoint(model, checkpoint_path)
+
+    resolved_checkpoint_path = _resolve_checkpoint_path(
+        checkpoint_path=checkpoint_path, load_from_HF=load_from_HF
+    )
+    _load_checkpoint(model, resolved_checkpoint_path)
 
     # Setup device and mode
     model = _setup_device_and_mode(model, device, eval_mode)
@@ -651,7 +683,7 @@ def download_ckpt_from_hf():
 
 def build_sam3_video_model(
     checkpoint_path: Optional[str] = None,
-    load_from_HF=True,
+    load_from_HF=False,
     bpe_path: Optional[str] = None,
     has_presence_token: bool = True,
     geo_encoder_use_img_cross_attn: bool = True,
@@ -770,21 +802,21 @@ def build_sam3_video_model(
         )
 
     # Load checkpoint if provided
-    if load_from_HF and checkpoint_path is None:
-        checkpoint_path = download_ckpt_from_hf()
-    if checkpoint_path is not None:
-        with g_pathmgr.open(checkpoint_path, "rb") as f:
-            ckpt = torch.load(f, map_location="cpu", weights_only=True)
-        if "model" in ckpt and isinstance(ckpt["model"], dict):
-            ckpt = ckpt["model"]
+    resolved_checkpoint_path = _resolve_checkpoint_path(
+        checkpoint_path=checkpoint_path, load_from_HF=load_from_HF
+    )
+    with g_pathmgr.open(resolved_checkpoint_path, "rb") as f:
+        ckpt = torch.load(f, map_location="cpu", weights_only=True)
+    if "model" in ckpt and isinstance(ckpt["model"], dict):
+        ckpt = ckpt["model"]
 
-        missing_keys, unexpected_keys = model.load_state_dict(
-            ckpt, strict=strict_state_dict_loading
-        )
-        if missing_keys:
-            print(f"Missing keys: {missing_keys}")
-        if unexpected_keys:
-            print(f"Unexpected keys: {unexpected_keys}")
+    missing_keys, unexpected_keys = model.load_state_dict(
+        ckpt, strict=strict_state_dict_loading
+    )
+    if missing_keys:
+        print(f"Missing keys: {missing_keys}")
+    if unexpected_keys:
+        print(f"Unexpected keys: {unexpected_keys}")
 
     model.to(device=device)
     return model
