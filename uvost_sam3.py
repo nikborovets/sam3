@@ -19,7 +19,7 @@ from typing import List, Dict, Any, Tuple
 from PIL import Image
 from tqdm import tqdm
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "sam3"))
+# sys.path.insert(0, os.path.join(os.path.dirname(__file__), "sam3"))
 
 try:
     from sam3.model_builder import build_sam3_video_model
@@ -40,7 +40,7 @@ class SAM3AutomaticMaskGenerator:
         self,
         image_model,
         points_per_side: int = 32,
-        points_per_batch: int = 64,
+        points_per_batch: int = 128,
         pred_iou_thresh: float = 0.7,
         box_nms_thresh: float = 0.7,
         min_mask_region_area: int = 100,
@@ -158,12 +158,12 @@ class UVOST_SAM3:
         self,
         grid_interval: int = 30,
         points_per_side: int = 16,
-        iou_threshold_nms: float = 0.7,
+        iou_threshold_nms: float = 0.4,
         iou_threshold_new_obj: float = 0.3,
         pred_iou_thresh: float = 0.5,
         min_mask_area: int = 500,
         device: str = "cuda",
-        output_dir: str = "output_uvost"
+        output_dir: str = "/workspace/output_uvost"
     ):
         self.grid_interval = grid_interval
         self.points_per_side = points_per_side
@@ -488,8 +488,9 @@ def main():
     parser.add_argument("video_path", help="Path to video or frame directory")
     parser.add_argument("--grid-interval", type=int, default=30)
     parser.add_argument("--points-per-side", type=int, default=16)
-    parser.add_argument("--iou-threshold", type=float, default=0.3)
-    parser.add_argument("--output-dir", type=str, default="output_uvost")
+    parser.add_argument("--iou-threshold", type=float, default=0.2)
+    parser.add_argument("--min-mask-area", type=int, default=50)
+    parser.add_argument("--output-dir", type=str, default="/workspace/output_uvost")
     parser.add_argument("--max-frames", type=int, default=None)
     
     args = parser.parse_args()
@@ -498,6 +499,7 @@ def main():
         grid_interval=args.grid_interval,
         points_per_side=args.points_per_side,
         iou_threshold_new_obj=args.iou_threshold,
+        min_mask_area=args.min_mask_area,
         output_dir=args.output_dir
     )
     
