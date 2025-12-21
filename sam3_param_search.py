@@ -15,12 +15,13 @@ if parent_dir not in sys.path:
     sys.path.append(parent_dir)
 
 try:
-    from sam3_auto_mask_gen import SAM3AutomaticMaskGenerator, save_anns
+    # from sam3_auto_mask_gen import SAM3AutomaticMaskGenerator, save_anns
+    from sam3_auto_mask_gen2 import SAM3AutomaticMaskGenerator, save_anns
     from sam3.model_builder import build_sam3_image_model
 except ImportError as e:
     # Fallback for imports if running directly inside the package structure
     sys.path.append(os.path.join(current_dir, ".."))
-    from sam3_auto_mask_gen import SAM3AutomaticMaskGenerator, save_anns
+    from sam3_auto_mask_gen2 import SAM3AutomaticMaskGenerator, save_anns
     from sam3.model_builder import build_sam3_image_model
 
 # Configure logging to output to stdout and file
@@ -160,24 +161,61 @@ def get_experiment_configs():
     experiments["9_pred_iou_thresh_0.82"] = conf9
 
     conf10 = conf9.copy()
-    conf10["pred_iou_thresh"] = 0.83
-    experiments["10_pred_iou_thresh_0.83"] = conf10
+    conf10["pred_iou_thresh"] = 0.7
+    experiments["10_pred_iou_thresh_0.7"] = conf10
 
     conf11 = conf9.copy()
-    conf11["pred_iou_thresh"] = 0.84
-    experiments["11_pred_iou_thresh_0.84"] = conf11
+    conf11["pred_iou_thresh"] = 0.73
+    experiments["11_pred_iou_thresh_0.73"] = conf11
 
     conf12 = conf9.copy()
-    conf12["pred_iou_thresh"] = 0.85
-    experiments["12_pred_iou_thresh_0.85"] = conf12
+    conf12["pred_iou_thresh"] = 0.75
+    experiments["12_pred_iou_thresh_0.75"] = conf12
 
     conf13 = conf9.copy()
-    conf13["pred_iou_thresh"] = 0.86
-    experiments["13_pred_iou_thresh_0.86"] = conf13
+    conf13["pred_iou_thresh"] = 0.77
+    experiments["13_pred_iou_thresh_0.77"] = conf13
 
     conf14 = conf9.copy()
-    conf14["pred_iou_thresh"] = 0.87
-    experiments["14_pred_iou_thresh_0.87"] = conf14
+    conf14["pred_iou_thresh"] = 0.79
+    experiments["14_pred_iou_thresh_0.79"] = conf14
+
+    conf15 = conf9.copy()
+    conf15.update({
+        "pred_iou_thresh": 0.82,
+        "stability_score_thresh": 0.85,
+    })
+    experiments["15_pred_iou_thresh_0.82_stability_0.85"] = conf15
+
+    conf16 = conf9.copy()
+    conf16.update({
+        "pred_iou_thresh": 0.82,
+        "stability_score_thresh": 0.87,
+    })
+    experiments["16_pred_iou_thresh_0.82_stability_0.87"] = conf16
+
+    conf17 = conf9.copy()
+    conf17.update({
+        "pred_iou_thresh": 0.82,
+        "stability_score_thresh": 0.89,
+    })
+    experiments["17_pred_iou_thresh_0.82_stability_0.89"] = conf17
+
+    conf18 = conf9.copy()
+    conf18.update({
+        "pred_iou_thresh": 0.82,
+        "stability_score_thresh": 0.91,
+    })
+    experiments["18_pred_iou_thresh_0.82_stability_0.91"] = conf18
+
+    conf19 = conf9.copy()
+
+    conf20 = conf9.copy()
+    conf20.update({
+        "pred_iou_thresh": 0.82,
+        "stability_score_thresh": 0.93,
+    })
+    experiments["20_pred_iou_thresh_0.82_stability_0.93"] = conf20
 
     return experiments
 
