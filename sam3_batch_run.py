@@ -181,12 +181,19 @@ class SAM3BatchProcessor:
                         retry_count += 1
                         logger.warning(f"OOM Error processing chunk {i+1}. Attempt {retry_count}/{max_retries}")
                         
-                        # Aggressive cleanup
+                        # Aggressive cleanup: destroy predictor and force full re-initialization
                         self.reset_session()
+                        
                         if 'chunk_images' in locals():
                             del chunk_images
+                            
+                        # Destroy the predictor to free any internal caches
+                        self.predictor = None
                         gc.collect()
                         torch.cuda.empty_cache()
+                        
+                        # Re-initialize predictor for next attempt
+                        self.initialize_predictor()
                         
                         if retry_count >= max_retries:
                             logger.error(f"Failed to process chunk {i+1} after {max_retries} attempts due to OOM.")
