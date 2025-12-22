@@ -185,8 +185,9 @@ class SAM3BatchProcessor:
         return merged_frames
 
     def visualize_merged(self, merged_frames, output_video_name="merged_output.mp4", fps=10, 
-                        show_box=True, show_label=True, show_mask=True):
-        """Create video with merged masks"""
+                        show_box=True, show_label=True, show_mask=True, 
+                        show_original_image=True, save_frames=True):
+        """Create video with merged masks and optionally save frames"""
         print("Generating visualization video...")
         
         first_frame = load_frame(self.video_frames[0])
@@ -194,12 +195,37 @@ class SAM3BatchProcessor:
         
         video_out_path = os.path.join(self.vis_dir, output_video_name)
         
+        # Directory for saved frames
+        frames_out_dir = os.path.join(self.vis_dir, os.path.splitext(output_video_name)[0] + "_frames")
+        if save_frames:
+            os.makedirs(frames_out_dir, exist_ok=True)
+        
         # Temp video file
         temp_path = os.path.join(self.vis_dir, "temp_render.mp4")
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         writer = cv2.VideoWriter(temp_path, fourcc, fps, (w, h))
         
-        from sam3.visualization_utils import COLORS
+        # from sam3.visualization_utils import COLORS
+        
+        # Generate bright distinct colors ensuring visibility on black background
+        def generate_bright_colors(n=256):
+            import colorsys
+            colors = []
+            # Use golden ratio to distribute hues evenly
+            golden_ratio_conjugate = 0.618033988749895
+            h = np.random.random()
+            for i in range(n):
+                h += golden_ratio_conjugate
+                h %= 1
+                # High saturation and value/brightness for visibility on black
+                # Saturation 0.5-0.9, Value 0.7-1.0
+                s = 0.6 + np.random.random() * 0.3
+                v = 0.8 + np.random.random() * 0.2
+                rgb = colorsys.hsv_to_rgb(h, s, v)
+                colors.append(rgb)
+            return np.array(colors)
+            
+        COLORS = generate_bright_colors(max(100, len(self.video_frames))) # Ensure enough colors
         
         for frame_idx in tqdm(sorted(merged_frames.keys())):
             if frame_idx >= len(self.video_frames):
@@ -213,8 +239,13 @@ class SAM3BatchProcessor:
                     img = (img * 255).astype(np.uint8)
                 else:
                     img = img.astype(np.uint8)
-                    
-            overlay = img.copy()
+            
+            # Start with original image or black background
+            if show_original_image:
+                overlay = img.copy()
+            else:
+                overlay = np.zeros_like(img)
+                
             outputs = merged_frames[frame_idx]
             
             # Custom rendering loop to control what to show
@@ -236,7 +267,9 @@ class SAM3BatchProcessor:
                                            interpolation=cv2.INTER_NEAREST)
                         
                         mask_bool = mask > 0.5
-                        alpha = 0.5
+                        # If showing on black background (no original image), use full opacity for mask
+                        alpha = 0.5 if show_original_image else 1.0
+                        
                         for c in range(3):
                             overlay[..., c][mask_bool] = (
                                 alpha * color255[c] + (1 - alpha) * overlay[..., c][mask_bool]
@@ -270,7 +303,20 @@ class SAM3BatchProcessor:
                         cv2.putText(overlay, label_text, (x1, max(y1 - 10, 0)),
                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color255, 1, cv2.LINE_AA)
 
-            writer.write(cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
+            bgr_frame = cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR)
+            writer.write(bgr_frame)
+            
+            if save_frames:
+                # Use original filename if possible, otherwise fall back to index
+                original_path = self.video_frames[frame_idx]
+                original_name = os.path.basename(original_path)
+                frame_filename = os.path.join(frames_out_dir, original_name)
+                # If extension is not png/jpg in original, we force it to match what we write or keep it?
+                # cv2.imwrite determines format by extension.
+                # Let's ensure we save as png or jpg correctly.
+                # If user wants exact original name, we trust cv2 handles the extension provided in original_name
+                # unless it's not an image extension supported by imwrite.
+                cv2.imwrite(frame_filename, bgr_frame)
             
         writer.release()
         
@@ -295,7 +341,7 @@ class SAM3BatchProcessor:
         print("Done!")
 
 if __name__ == "__main__":
-    VIDEO_PATH = "/workspace/ivan_images_slice_with_id" 
+    VIDEO_PATH = "/workspace/ivan_images_slice" 
     OUTPUT_DIR = "/workspace/sam3_batch_results"
     PROMPTS = [
         "chair", 
@@ -336,10 +382,12 @@ if __name__ == "__main__":
     
     processor.visualize_merged(
         merged, 
-        output_video_name="merged_output_masks_only.mp4",
+        output_video_name="merged_output_no_image.mp4",
         show_box=False,
         show_label=False,
-        show_mask=True
+        show_mask=True,
+        show_original_image=False,
+        save_frames=True
     )
     
     # processor.visualize_merged(merged, output_video_name="merged_full.mp4", show_box=True, show_label=True)
