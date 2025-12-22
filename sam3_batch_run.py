@@ -59,14 +59,14 @@ class SAM3BatchProcessor:
             logger.info("Initializing SAM3 predictor...")
             self.predictor = build_sam3_video_predictor()
 
-    def start_session(self):
+    def start_session(self, resource=None):
         self.initialize_predictor()
         logger.info("Starting inference session...")
         try:
             response = self.predictor.handle_request(
                 request=dict(
                     type="start_session",
-                    resource_path=self.video_path,
+                    resource_path=resource if resource is not None else self.video_path,
                 )
             )
             self.session_id = response["session_id"]
@@ -89,8 +89,31 @@ class SAM3BatchProcessor:
             gc.collect()
             torch.cuda.empty_cache()
 
+    def _create_chunks(self):
+        """
+        Splits the total list of video frames into segments of random length
+        (e.g., 350 to 450 frames) to avoid OOM.
+        """
+        total_frames = len(self.video_frames)
+        chunks = []
+        current_idx = 0
+        
+        while current_idx < total_frames:
+            remaining = total_frames - current_idx
+            if remaining <= 450:
+                chunk_size = remaining
+            else:
+                chunk_size = np.random.randint(350, 451)
+            
+            end_idx = current_idx + chunk_size
+            chunks.append((current_idx, end_idx))
+            current_idx = end_idx
+            
+        logger.info(f"Created {len(chunks)} chunks with sizes: {[(e-s) for s,e in chunks]}")
+        return chunks
+
     def process_prompt(self, prompt_text, force_recompute=False):
-        """Process a single text prompt and save results"""
+        """Process a single text prompt and save results using chunking"""
         safe_prompt = prompt_text.replace(" ", "_")
         cache_file = os.path.join(self.cache_dir, f"{safe_prompt}.npz")
         
@@ -99,47 +122,63 @@ class SAM3BatchProcessor:
             return np.load(cache_file, allow_pickle=True)['outputs'].item()
 
         # Check if predictor/session is initialized before processing new prompts
-        if self.predictor is None or self.session_id is None:
-            self.start_session()
+        if self.predictor is None:
+            self.initialize_predictor()
 
-        logger.info(f"Processing prompt: '{prompt_text}'...")
-        # Reset session to clear previous state
-        self.reset_session()
+        logger.info(f"Processing prompt: '{prompt_text}' with chunking...")
         
-        # Add prompt
+        chunks = self._create_chunks()
+        all_outputs = {}
+        
         try:
-            self.predictor.handle_request(
-                request=dict(
-                    type="add_prompt",
-                    session_id=self.session_id,
-                    frame_index=0,
-                    text=prompt_text,
+            for i, (start_idx, end_idx) in enumerate(chunks):
+                logger.info(f"Processing chunk {i+1}/{len(chunks)}: frames {start_idx} to {end_idx}")
+                
+                # Load frames for this chunk
+                chunk_paths = self.video_frames[start_idx:end_idx]
+                chunk_images = [Image.open(p) for p in chunk_paths]
+                
+                # Reset session to clear previous state
+                self.reset_session()
+                
+                # Start session with this chunk
+                self.start_session(resource=chunk_images)
+                
+                # Add prompt
+                # Note: We apply the text prompt to the first frame of the chunk (relative index 0)
+                self.predictor.handle_request(
+                    request=dict(
+                        type="add_prompt",
+                        session_id=self.session_id,
+                        frame_index=0,
+                        text=prompt_text,
+                    )
                 )
-            )
-            
-            # Propagate
-            outputs = {}
-            for response in self.predictor.handle_stream_request(
-                request=dict(
-                    type="propagate_in_video",
-                    session_id=self.session_id,
-                )
-            ):
-                outputs[response["frame_index"]] = response["outputs"]
+                
+                # Propagate
+                for response in self.predictor.handle_stream_request(
+                    request=dict(
+                        type="propagate_in_video",
+                        session_id=self.session_id,
+                    )
+                ):
+                    local_idx = response["frame_index"]
+                    global_idx = start_idx + local_idx
+                    all_outputs[global_idx] = response["outputs"]
+                
+                # Clean up chunk resources
+                del chunk_images
+                self.reset_session()
                 
             # Save to cache
-            np.savez_compressed(cache_file, outputs=outputs)
+            np.savez_compressed(cache_file, outputs=all_outputs)
             
-            # Clear GPU memory after processing
-            gc.collect()
-            torch.cuda.empty_cache()
+            return all_outputs
             
-            return outputs
         except torch.cuda.OutOfMemoryError:
-            logger.error(f"OOM Error while processing '{prompt_text}'. Attempting to clear cache and retry once.")
+            logger.error(f"OOM Error while processing '{prompt_text}'.")
             gc.collect()
             torch.cuda.empty_cache()
-            # If needed, one could implement a retry logic here or just fail gracefully
             raise
         except Exception as e:
             logger.error(f"Error processing prompt '{prompt_text}': {e}")
