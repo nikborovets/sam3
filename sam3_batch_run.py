@@ -9,6 +9,13 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 from sam3.model_builder import build_sam3_video_predictor
 from sam3.visualization_utils import load_frame, prepare_masks_for_visualization, render_masklet_frame
+from sam3.logger import get_logger
+
+import logging
+import gc
+
+# Configure logging
+logger = get_logger(__name__, level=logging.INFO)
 
 class SAM3BatchProcessor:
     def __init__(self, video_path, output_dir, device='cuda'):
@@ -29,7 +36,7 @@ class SAM3BatchProcessor:
         
     def _load_video_frames(self):
         """Loads video frames paths or extracts them from video"""
-        print(f"Loading video from {self.video_path}")
+        logger.info(f"Loading video from {self.video_path}")
         if os.path.isdir(self.video_path):
             frames = sorted(glob.glob(os.path.join(self.video_path, "*.png")) + 
                           glob.glob(os.path.join(self.video_path, "*.jpg")))
@@ -37,7 +44,9 @@ class SAM3BatchProcessor:
             try:
                 frames.sort(key=lambda x: int(os.path.splitext(os.path.basename(x))[0]))
             except:
+                logger.warning("Could not sort frames numerically, falling back to lexicographic sort")
                 frames.sort()
+            logger.info(f"Found {len(frames)} frames")
             return frames
         else:
             # Handle video file - extract to temp dir or read on fly? 
@@ -47,29 +56,77 @@ class SAM3BatchProcessor:
 
     def initialize_predictor(self):
         if self.predictor is None:
-            print("Initializing SAM3 predictor...")
-            self.predictor = build_sam3_video_predictor()
-            
+            logger.info("Initializing SAM3 predictor...")
+            # Set environment variable to reduce fragmentation if possible
+            os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+            try:
+                # Initialize with default arguments
+                self.predictor = build_sam3_video_predictor()
+                
+                # HOTFIX: Manually override max_num_objects on the underlying model to save memory
+                # The model is usually in self.predictor.model
+                if hasattr(self.predictor, "model"):
+                    model = self.predictor.model
+                    
+                    # Unwrap if needed (e.g. DDP)
+                    if hasattr(model, "module"):
+                        model = model.module
+                        
+                    # Override max_num_objects if attribute exists
+                    # Default is 10000, reducing to 200 saves memory on state tensors
+                    if hasattr(model, "max_num_objects"):
+                        old_val = model.max_num_objects
+                        model.max_num_objects = 200
+                        logger.info(f"Overrode max_num_objects: {old_val} -> {model.max_num_objects}")
+                    
+                    # Override num_obj_for_compile if attribute exists
+                    # Default is 16, reducing to 4 saves memory during compilation padding
+                    if hasattr(model, "num_obj_for_compile"):
+                        # Note: In Sam3VideoBase, num_obj_for_compile is likely a local variable in __init__ 
+                        # and might not be stored as an attribute directly, or it might be used 
+                        # to set up other components. However, if it IS stored, let's change it.
+                        # Let's check if it exists or if we need to dig deeper.
+                        # Based on typical implementations, it might be used to init buffers.
+                        # Changing it after init might be too late for buffers already allocated,
+                        # but worth a try if the model re-initializes parts on reset_session.
+                        if hasattr(model, "num_obj_for_compile"):
+                            old_compile_val = model.num_obj_for_compile
+                            model.num_obj_for_compile = 4
+                            logger.info(f"Overrode num_obj_for_compile: {old_compile_val} -> {model.num_obj_for_compile}")
+                        
+            except Exception as e:
+                logger.error(f"Failed to initialize predictor: {e}")
+                raise
+
     def start_session(self):
         self.initialize_predictor()
-        print("Starting inference session...")
-        response = self.predictor.handle_request(
-            request=dict(
-                type="start_session",
-                resource_path=self.video_path,
+        logger.info("Starting inference session...")
+        try:
+            response = self.predictor.handle_request(
+                request=dict(
+                    type="start_session",
+                    resource_path=self.video_path,
+                )
             )
-        )
-        self.session_id = response["session_id"]
-        return self.session_id
+            self.session_id = response["session_id"]
+            logger.info(f"Session started with ID: {self.session_id}")
+            return self.session_id
+        except Exception as e:
+            logger.error(f"Failed to start session: {e}")
+            raise
 
     def reset_session(self):
         if self.session_id:
+            logger.info("Resetting session...")
             self.predictor.handle_request(
                 request=dict(
                     type="reset_session",
                     session_id=self.session_id,
                 )
             )
+            # Force garbage collection
+            gc.collect()
+            torch.cuda.empty_cache()
 
     def process_prompt(self, prompt_text, force_recompute=False):
         """Process a single text prompt and save results"""
@@ -77,44 +134,55 @@ class SAM3BatchProcessor:
         cache_file = os.path.join(self.cache_dir, f"{safe_prompt}.npz")
         
         if os.path.exists(cache_file) and not force_recompute:
-            print(f"Loading cached results for '{prompt_text}'...")
+            logger.info(f"Loading cached results for '{prompt_text}'...")
             return np.load(cache_file, allow_pickle=True)['outputs'].item()
 
         # Check if predictor/session is initialized before processing new prompts
         if self.predictor is None or self.session_id is None:
             self.start_session()
 
-        print(f"Processing prompt: '{prompt_text}'...")
+        logger.info(f"Processing prompt: '{prompt_text}'...")
         # Reset session to clear previous state
         self.reset_session()
         
         # Add prompt
-        self.predictor.handle_request(
-            request=dict(
-                type="add_prompt",
-                session_id=self.session_id,
-                frame_index=0,
-                text=prompt_text,
+        try:
+            self.predictor.handle_request(
+                request=dict(
+                    type="add_prompt",
+                    session_id=self.session_id,
+                    frame_index=0,
+                    text=prompt_text,
+                )
             )
-        )
-        
-        # Propagate
-        outputs = {}
-        for response in self.predictor.handle_stream_request(
-            request=dict(
-                type="propagate_in_video",
-                session_id=self.session_id,
-            )
-        ):
-            outputs[response["frame_index"]] = response["outputs"]
             
-        # Prepare for saving (convert tensors to numpy if needed)
-        # Note: response['outputs'] usually contains numpy arrays from the predictor
-        
-        # Save to cache
-        np.savez_compressed(cache_file, outputs=outputs)
-        
-        return outputs
+            # Propagate
+            outputs = {}
+            for response in self.predictor.handle_stream_request(
+                request=dict(
+                    type="propagate_in_video",
+                    session_id=self.session_id,
+                )
+            ):
+                outputs[response["frame_index"]] = response["outputs"]
+                
+            # Save to cache
+            np.savez_compressed(cache_file, outputs=outputs)
+            
+            # Clear GPU memory after processing
+            gc.collect()
+            torch.cuda.empty_cache()
+            
+            return outputs
+        except torch.cuda.OutOfMemoryError:
+            logger.error(f"OOM Error while processing '{prompt_text}'. Attempting to clear cache and retry once.")
+            gc.collect()
+            torch.cuda.empty_cache()
+            # If needed, one could implement a retry logic here or just fail gracefully
+            raise
+        except Exception as e:
+            logger.error(f"Error processing prompt '{prompt_text}': {e}")
+            raise
 
     def merge_results(self, all_outputs):
         """Merge outputs from multiple prompts into a single per-frame structure"""
