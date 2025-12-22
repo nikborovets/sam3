@@ -506,8 +506,8 @@ def main():
         device=str(device)
     )
 
-    input_path = Path('/workspace/ivan_images_slice2')
-    output_path = Path('/workspace/output_masks_ivan_slicy_3_48/')
+    input_path = Path('/workspace/ivan_input_images')
+    output_path = Path('/workspace/output_masks_ivan_48_ALL1200/')
     output_path.mkdir(parents=True, exist_ok=True)
 
     if not input_path.exists():
