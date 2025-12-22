@@ -938,4 +938,9 @@ def load_frame(frame):
         img = plt.imread(frame)
     else:
         raise ValueError(f"Invalid video frame type: {type(frame)=}")
+
+    # Convert float32/float64 images (usually 0-1 range from plt.imread) to uint8 (0-255)
+    if img.dtype == np.float32 or img.dtype == np.float64:
+        img = (np.clip(img, 0, 1) * 255).astype(np.uint8)
+
     return img
