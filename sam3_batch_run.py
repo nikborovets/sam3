@@ -132,56 +132,74 @@ class SAM3BatchProcessor:
         
         try:
             for i, (start_idx, end_idx) in enumerate(chunks):
-                logger.info(f"Processing chunk {i+1}/{len(chunks)}: frames {start_idx} to {end_idx}")
+                retry_count = 0
+                max_retries = 3
+                success = False
                 
-                # Load frames for this chunk
-                chunk_paths = self.video_frames[start_idx:end_idx]
-                chunk_images = [Image.open(p) for p in chunk_paths]
-                
-                # Reset session to clear previous state
-                self.reset_session()
-                
-                # Start session with this chunk
-                self.start_session(resource=chunk_images)
-                
-                # Add prompt
-                # Note: We apply the text prompt to the first frame of the chunk (relative index 0)
-                self.predictor.handle_request(
-                    request=dict(
-                        type="add_prompt",
-                        session_id=self.session_id,
-                        frame_index=0,
-                        text=prompt_text,
-                    )
-                )
-                
-                # Propagate
-                for response in self.predictor.handle_stream_request(
-                    request=dict(
-                        type="propagate_in_video",
-                        session_id=self.session_id,
-                    )
-                ):
-                    local_idx = response["frame_index"]
-                    global_idx = start_idx + local_idx
-                    all_outputs[global_idx] = response["outputs"]
-                
-                # Clean up chunk resources
-                del chunk_images
-                self.reset_session()
-                
+                while not success:
+                    try:
+                        logger.info(f"Processing chunk {i+1}/{len(chunks)}: frames {start_idx} to {end_idx} (Attempt {retry_count + 1})")
+                        
+                        # Load frames for this chunk
+                        chunk_paths = self.video_frames[start_idx:end_idx]
+                        chunk_images = [Image.open(p) for p in chunk_paths]
+                        
+                        # Reset session to clear previous state
+                        self.reset_session()
+                        
+                        # Start session with this chunk
+                        self.start_session(resource=chunk_images)
+                        
+                        # Add prompt
+                        # Note: We apply the text prompt to the first frame of the chunk (relative index 0)
+                        self.predictor.handle_request(
+                            request=dict(
+                                type="add_prompt",
+                                session_id=self.session_id,
+                                frame_index=0,
+                                text=prompt_text,
+                            )
+                        )
+                        
+                        # Propagate
+                        for response in self.predictor.handle_stream_request(
+                            request=dict(
+                                type="propagate_in_video",
+                                session_id=self.session_id,
+                            )
+                        ):
+                            local_idx = response["frame_index"]
+                            global_idx = start_idx + local_idx
+                            all_outputs[global_idx] = response["outputs"]
+                        
+                        # Clean up chunk resources
+                        del chunk_images
+                        self.reset_session()
+                        success = True
+                        
+                    except torch.cuda.OutOfMemoryError:
+                        retry_count += 1
+                        logger.warning(f"OOM Error processing chunk {i+1}. Attempt {retry_count}/{max_retries}")
+                        
+                        # Aggressive cleanup
+                        self.reset_session()
+                        if 'chunk_images' in locals():
+                            del chunk_images
+                        gc.collect()
+                        torch.cuda.empty_cache()
+                        
+                        if retry_count >= max_retries:
+                            logger.error(f"Failed to process chunk {i+1} after {max_retries} attempts due to OOM.")
+                            raise
+
             # Save to cache
             np.savez_compressed(cache_file, outputs=all_outputs)
             
             return all_outputs
             
-        except torch.cuda.OutOfMemoryError:
-            logger.error(f"OOM Error while processing '{prompt_text}'.")
-            gc.collect()
-            torch.cuda.empty_cache()
-            raise
         except Exception as e:
-            logger.error(f"Error processing prompt '{prompt_text}': {e}")
+            if not isinstance(e, torch.cuda.OutOfMemoryError): # OOM is already handled/raised above
+                logger.error(f"Error processing prompt '{prompt_text}': {e}")
             raise
 
     def merge_results(self, all_outputs):
