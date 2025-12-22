@@ -57,46 +57,7 @@ class SAM3BatchProcessor:
     def initialize_predictor(self):
         if self.predictor is None:
             logger.info("Initializing SAM3 predictor...")
-            # Set environment variable to reduce fragmentation if possible
-            os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-            try:
-                # Initialize with default arguments
-                self.predictor = build_sam3_video_predictor()
-                
-                # HOTFIX: Manually override max_num_objects on the underlying model to save memory
-                # The model is usually in self.predictor.model
-                if hasattr(self.predictor, "model"):
-                    model = self.predictor.model
-                    
-                    # Unwrap if needed (e.g. DDP)
-                    if hasattr(model, "module"):
-                        model = model.module
-                        
-                    # Override max_num_objects if attribute exists
-                    # Default is 10000, reducing to 200 saves memory on state tensors
-                    if hasattr(model, "max_num_objects"):
-                        old_val = model.max_num_objects
-                        model.max_num_objects = 200
-                        logger.info(f"Overrode max_num_objects: {old_val} -> {model.max_num_objects}")
-                    
-                    # Override num_obj_for_compile if attribute exists
-                    # Default is 16, reducing to 4 saves memory during compilation padding
-                    if hasattr(model, "num_obj_for_compile"):
-                        # Note: In Sam3VideoBase, num_obj_for_compile is likely a local variable in __init__ 
-                        # and might not be stored as an attribute directly, or it might be used 
-                        # to set up other components. However, if it IS stored, let's change it.
-                        # Let's check if it exists or if we need to dig deeper.
-                        # Based on typical implementations, it might be used to init buffers.
-                        # Changing it after init might be too late for buffers already allocated,
-                        # but worth a try if the model re-initializes parts on reset_session.
-                        if hasattr(model, "num_obj_for_compile"):
-                            old_compile_val = model.num_obj_for_compile
-                            model.num_obj_for_compile = 4
-                            logger.info(f"Overrode num_obj_for_compile: {old_compile_val} -> {model.num_obj_for_compile}")
-                        
-            except Exception as e:
-                logger.error(f"Failed to initialize predictor: {e}")
-                raise
+            self.predictor = build_sam3_video_predictor()
 
     def start_session(self):
         self.initialize_predictor()
