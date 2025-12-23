@@ -219,7 +219,7 @@ def run_big_config():
         "cushion",
         "chair",
         "table",
-        "bin",  # Обычно стоит на полу, ближе к мебели
+        "bin",
 
         # --- Предметы в шкафу/на полках (Objects on shelves/background) ---
         "cardboard boxes",
@@ -232,15 +232,15 @@ def run_big_config():
         "mug",
         "black thing",
         
-        # --- Техника на столе (отсутствующая на фото, но была в списке) ---
+        # --- Техника на столе ---
         "monitor",
         "imac",
 
         # --- Мелкие предметы на столе/переднем плане (Objects on desk/foreground) ---
-        "keyboard",          # Объединено с computer keyboard
+        "keyboard",
         "touchpad",
         "mouse",
-        "usb adapter",       # Объединено с usb hub
+        "usb adapter",
         "wires",
         "plug",
         "battery",
@@ -248,9 +248,85 @@ def run_big_config():
         "screwdriver",
     ]
     merged = fill_config(
-        video_path="/workspace/ivan_input_images",
-        output_dir="/workspace/sam3_batch_results_all_input_images_0",
-        output_video_name="merged_output_all_input_images_with_image.mp4",
+        video_path="/workspace/edited_color_and_edge_sharpness_every_3_frame_new",
+        output_dir="/workspace/sam3_batch_results_all_input_images_3_edge_sharpness_color_new",
+        output_video_name="merged_output_all_input_images_3_edge_sharpness_color_new_no_image.mp4",
+        prompts=prompts,
+        show_box=False,
+        show_label=False,
+        show_mask=True,
+        show_original_image=False,
+        save_frames=True)
+    print("Done!")
+    return merged
+
+def run_music_room_config():
+    prompts = [
+        # --- Архитектура и фон (Room Structure) ---
+        "wall",
+        "ceiling",
+        "floor",
+        "baseboard",
+        "concrete",
+        "column",
+        # "window",
+        "door",
+        "pipe",
+
+        # --- Элементы на стенах (Fixtures) ---
+        "socket",
+        "switch",
+        "light switch",
+        # "window blind",
+        "door handle",
+        "blackboard",
+        # "black plate",
+        "paperboard",
+
+        # --- Крупная мебель (Large Furniture) ---
+        "wardrobe",
+        "cabinet wall",
+        "shelves",
+        "cabinet door",
+        "glass",
+        # "inside of the cabinet",
+        "sofa",
+        "armrest",
+        "cushion",
+        "chair",
+        "table",
+        "bin",
+
+        # # --- Предметы в шкафу/на полках (Objects on shelves/background) ---
+        "cardboard boxes",
+        "box",
+        # "router box",
+        "package",
+        "frame",
+        "book",
+        # "helmet",
+        "mug",
+        # "black thing",
+        
+        # --- Техника на столе ---
+        "monitor",
+        "imac",
+
+        # --- Мелкие предметы на столе/переднем плане (Objects on desk/foreground) ---
+        "keyboard",
+        "touchpad",
+        # "mouse",
+        "usb adapter",
+        "wires",
+        "plug",
+        "battery",
+        "paper",
+        # "screwdriver",
+    ]
+    merged = fill_config(
+        video_path="/workspace/music_room_input_3frames",
+        output_dir="/workspace/sam3_batch_results_music_room",
+        output_video_name="merged_output_music_room_with_image.mp4",
         prompts=prompts,
         show_box=False,
         show_label=False,
@@ -264,4 +340,5 @@ def run_big_config():
 if __name__ == "__main__":
     # run_config_1()
     # run_config_2()
-    run_big_config()
+    # run_big_config()
+    run_music_room_config()

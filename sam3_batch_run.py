@@ -133,7 +133,7 @@ class SAM3BatchProcessor:
         try:
             for i, (start_idx, end_idx) in enumerate(chunks):
                 retry_count = 0
-                max_retries = 3
+                max_retries = 1
                 success = False
                 
                 while not success:
@@ -187,13 +187,13 @@ class SAM3BatchProcessor:
                         if 'chunk_images' in locals():
                             del chunk_images
                             
-                        # Destroy the predictor to free any internal caches
-                        self.predictor = None
+                        # # Destroy the predictor to free any internal caches
+                        # self.predictor = None
                         gc.collect()
                         torch.cuda.empty_cache()
                         
-                        # Re-initialize predictor for next attempt
-                        self.initialize_predictor()
+                        # # Re-initialize predictor for next attempt
+                        # self.initialize_predictor()
                         
                         if retry_count >= max_retries:
                             logger.error(f"Failed to process chunk {i+1} after {max_retries} attempts due to OOM.")
@@ -218,7 +218,7 @@ class SAM3BatchProcessor:
         for out in all_outputs.values():
             all_frames.update(out.keys())
             
-        print("Merging results...")
+        logger.info("Merging results...")
         global_obj_id = 0
         
         for frame_idx in sorted(list(all_frames)):
@@ -281,7 +281,7 @@ class SAM3BatchProcessor:
                         show_box=True, show_label=True, show_mask=True, 
                         show_original_image=True, save_frames=True):
         """Create video with merged masks and optionally save frames"""
-        print("Generating visualization video...")
+        logger.info("Generating visualization video...")
         
         first_frame = load_frame(self.video_frames[0])
         h, w = first_frame.shape[:2]
@@ -419,7 +419,7 @@ class SAM3BatchProcessor:
             
         os.system(f"ffmpeg -y -i {temp_path} -vcodec libx264 {video_out_path}")
         os.remove(temp_path)
-        print(f"Video saved to {video_out_path}")
+        logger.info(f"Video saved to {video_out_path}")
 
     def run(self, prompts):
         self.start_session()
@@ -431,7 +431,7 @@ class SAM3BatchProcessor:
         merged = self.merge_results(all_outputs)
         self.visualize_merged(merged)
         
-        print("Done!")
+        logger.info("Done!")
 
 if __name__ == "__main__":
     VIDEO_PATH = "/workspace/ivan_images_slice" 
@@ -485,5 +485,5 @@ if __name__ == "__main__":
     
     # processor.visualize_merged(merged, output_video_name="merged_full.mp4", show_box=True, show_label=True)
     
-    print("Done!")
+    logger.info("Done!")
 
