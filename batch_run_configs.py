@@ -241,7 +241,7 @@ def run_big_config():
         "touchpad",
         "mouse",
         "usb adapter",
-        "wires",
+        "wire",
         "plug",
         "battery",
         "paper",
@@ -261,78 +261,120 @@ def run_big_config():
     return merged
 
 def run_music_room_config():
+    # prompts = [
+    #     # # --- Архитектура и фон (Room Structure) ---
+    #     "wall",
+    #     "ceiling",
+    #     "floor",
+    #     "carpet",
+    #     "baseboard",
+    #     "concrete",
+    #     "column",
+    #     "door",
+    #     "pipe",
+    #     "illumination",
+    #     "radiator", # Радиатор отопления
+    #     "ventilation shaft", # Вентиляционные шахты
+    #     "ventilation pipe", # Вентиляционные трубы
+    #     "mosaic on the wall", # Мозаика на стене
+    #     "hexagon", # Шестиугольник
+    #     "mosaic of hexagons",
+    #     "black mosaic",
+    #     "shadow",
+
+    #     # --- Элементы на стенах (Fixtures) ---
+    #     "socket",
+    #     "switch",
+    #     "light switch",
+    #     "door handle",
+    #     "blackboard",
+    #     "paperboard",
+
+    #     # --- Крупная мебель (Large Furniture) ---
+    #     "wardrobe", # Шкаф
+    #     "cabinet wall",
+    #     "shelves",
+    #     "closet",
+    #     "cabinet door",
+    #     "glass",
+    #     "sofa",
+    #     "armrest",
+    #     "cushion",
+    #     "chair",
+    #     "table",
+    #     "bin", # Мусорное ведро
+    #     "trash can",
+    #     "water cooler", # Кулер водяной
+    #     "pouf", # Пуфики
+
+    #     # --- Музыкальное оборудование и инструменты (Musical Equipment) ---
+    #     "drums", # Барабаны
+    #     "cymbal", # Тарелки барабанные
+    #     "drumstick", # Палочки барабанные
+    #     "guitar", # Гитара
+    #     "ukulele", # Укулеле
+    #     "piano", # Пианино
+    #     "digital piano stand", # Стойка для пианино
+    #     "accordion", # Баян или аккордеон
+    #     "guitar amplifier", # Комбоусилитель
+    #     "guitar pedal", # Гитарная педаль
+    #     "mixing console", # Музыкальный пульт
+    #     "microphone stand", # Стойки для микрофонов
+    #     "tambourine", # Тамбурин
+    #     "bongo drum", # Бонго (ударный инструмент)
+    #     "guitar case", # Гитарный чехол
+    #     "instrument case", # Чехлы для инструментов
+
+    #     # --- Предметы в шкафу/на полках (Objects on shelves/background) ---
+    #     "cardboard box",
+    #     "box",
+    #     "package",
+    #     "frame",
+    #     "book",
+    #     "mug",
+    #     "bottle", # Бутылка
+    #     "bag", # Сумка
+    #     "plastic cup", # Пластиковые стаканчики
+
+    #     # --- Техника на столе ---
+    #     "monitor",
+    #     "imac",
+
+    #     # --- Мелкие предметы на столе/переднем плане (Objects on desk/foreground) ---
+    #     "keyboard",
+    #     "touchpad",
+    #     "usb adapter",
+    #     "wire",
+    #     "plug",
+    #     "battery",
+    #     "paper",
+    #     "object on the table",
+    #     "mixing console",
+    # ]
     prompts = [
-        # --- Архитектура и фон (Room Structure) ---
-        "wall",
-        "ceiling",
-        "floor",
-        "baseboard",
-        "concrete",
-        "column",
-        # "window",
-        "door",
-        "pipe",
-
-        # --- Элементы на стенах (Fixtures) ---
-        "socket",
-        "switch",
-        "light switch",
-        # "window blind",
-        "door handle",
-        "blackboard",
-        # "black plate",
-        "paperboard",
-
-        # --- Крупная мебель (Large Furniture) ---
-        "wardrobe",
-        "cabinet wall",
-        "shelves",
-        "cabinet door",
-        "glass",
-        # "inside of the cabinet",
-        "sofa",
-        "armrest",
-        "cushion",
-        "chair",
-        "table",
-        "bin",
-
-        # # --- Предметы в шкафу/на полках (Objects on shelves/background) ---
-        "cardboard boxes",
-        "box",
-        # "router box",
-        "package",
-        "frame",
-        "book",
-        # "helmet",
-        "mug",
-        # "black thing",
-        
-        # --- Техника на столе ---
-        "monitor",
-        "imac",
-
-        # --- Мелкие предметы на столе/переднем плане (Objects on desk/foreground) ---
-        "keyboard",
-        "touchpad",
-        # "mouse",
-        "usb adapter",
-        "wires",
-        "plug",
-        "battery",
-        "paper",
-        # "screwdriver",
+    "table",
     ]
+
     merged = fill_config(
         video_path="/workspace/music_room_input_3frames",
         output_dir="/workspace/sam3_batch_results_music_room",
-        output_video_name="merged_output_music_room_with_image.mp4",
+        output_video_name="bb_label_image.mp4",
         prompts=prompts,
-        show_box=False,
-        show_label=False,
+        show_box=True,
+        show_label=True,
         show_mask=True,
         show_original_image=True,
         save_frames=True)
+    # merged = fill_config(
+    #     video_path="/workspace/music_room_input_3frames",
+    #     output_dir="/workspace/sam3_batch_results_music_room",
+    #     output_video_name="merged_output_music_room_no_image.mp4",
+    #     prompts=prompts,
+    #     show_box=False,
+    #     show_label=False,
+    #     show_mask=True,
+    #     show_original_image=False,
+    #     save_frames=True)
     print("Done!")
     return merged
 

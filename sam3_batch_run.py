@@ -94,16 +94,19 @@ class SAM3BatchProcessor:
         Splits the total list of video frames into segments of random length
         (e.g., 350 to 450 frames) to avoid OOM.
         """
+        # slice_size = [350, 450] # [min, max]
+        slice_size = [220, 350] # [min, max]
+        # slice_size = [20, 25] # [min, max]
         total_frames = len(self.video_frames)
         chunks = []
         current_idx = 0
         
         while current_idx < total_frames:
             remaining = total_frames - current_idx
-            if remaining <= 450:
+            if remaining <= slice_size[1]:
                 chunk_size = remaining
             else:
-                chunk_size = np.random.randint(350, 451)
+                chunk_size = np.random.randint(slice_size[0], slice_size[1] + 1)
             
             end_idx = current_idx + chunk_size
             chunks.append((current_idx, end_idx))
