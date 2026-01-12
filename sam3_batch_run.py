@@ -95,7 +95,8 @@ class SAM3BatchProcessor:
         (e.g., 350 to 450 frames) to avoid OOM.
         """
         # slice_size = [350, 450] # [min, max]
-        slice_size = [220, 350] # [min, max]
+        slice_size = [300, 350] # [min, max]
+        # slice_size = [220, 350] # [min, max]
         # slice_size = [20, 25] # [min, max]
         total_frames = len(self.video_frames)
         chunks = []
@@ -213,7 +214,7 @@ class SAM3BatchProcessor:
             raise
 
     def merge_results(self, all_outputs):
-        """Merge outputs from multiple prompts into a single per-frame structure"""
+        """Merge outputs from multiple prompts into a single per-frame structure with consistent IDs"""
         merged_frames = {}
         
         # Get all frame indices
@@ -222,7 +223,11 @@ class SAM3BatchProcessor:
             all_frames.update(out.keys())
             
         logger.info("Merging results...")
-        global_obj_id = 0
+        
+        # Global registry to keep IDs consistent across frames
+        # Key: (prompt_text, original_obj_id), Value: global_unique_id
+        id_registry = {}
+        next_global_id = 0
         
         for frame_idx in sorted(list(all_frames)):
             frame_merged = {
@@ -241,22 +246,25 @@ class SAM3BatchProcessor:
                     if len(p_out["out_obj_ids"]) == 0:
                         continue
                         
-                    # Offset object IDs to make them unique across prompts
-                    # We use a simple strategy: prompt_index * 1000 + obj_id
-                    # Or we can just re-enumerate them globally
-                    
                     ids = p_out["out_obj_ids"]
                     masks = p_out["out_binary_masks"]
                     probs = p_out["out_probs"]
                     boxes = p_out["out_boxes_xywh"]
                     
                     for i in range(len(ids)):
-                        # Create unique ID: simple hash or counter
-                        # Here we'll use a composite string key for tracking, 
-                        # but for visualization we need int.
-                        # Let's generate a unique int based on prompt index
+                        original_id = ids[i]
                         
-                        frame_merged["out_obj_ids"].append(ids[i]) # Will need remapping later for unique colors
+                        # Generate or retrieve unique persistent ID
+                        # We assume SAM tracks ID consistently within a single prompt session
+                        obj_key = (prompt, original_id)
+                        
+                        if obj_key not in id_registry:
+                            id_registry[obj_key] = next_global_id
+                            next_global_id += 1
+                        
+                        persistent_id = id_registry[obj_key]
+                        
+                        frame_merged["out_obj_ids"].append(persistent_id)
                         frame_merged["out_binary_masks"].append(masks[i])
                         frame_merged["out_probs"].append(probs[i])
                         frame_merged["out_boxes_xywh"].append(boxes[i])
@@ -264,9 +272,7 @@ class SAM3BatchProcessor:
 
             # Convert lists to numpy arrays
             if frame_merged["out_obj_ids"]:
-                # Remap IDs to be unique: {prompt}_{original_id} -> new_int_id
-                # For simplicity here, we just use the index in the list as temporary ID for visualization color
-                frame_merged["out_obj_ids"] = np.arange(len(frame_merged["out_obj_ids"]))
+                frame_merged["out_obj_ids"] = np.array(frame_merged["out_obj_ids"])
                 frame_merged["out_probs"] = np.array(frame_merged["out_probs"])
                 frame_merged["out_binary_masks"] = np.array(frame_merged["out_binary_masks"])
                 frame_merged["out_boxes_xywh"] = np.array(frame_merged["out_boxes_xywh"])
@@ -391,10 +397,10 @@ class SAM3BatchProcessor:
                             # x1, y1 already defined
                             pass
                             
-                        prob = outputs["out_probs"][i]
-                        # prompt = outputs["prompt_source"][i] # Optional: show prompt name
+                        # prob = outputs["out_probs"][i]
+                        prompt = outputs["prompt_source"][i] # Optional: show prompt name
                         label_text = f"id={obj_id}"
-                        # label_text = f"{prompt} {prob:.2f}"
+                        # label_text = f"{obj_id}, {prompt}, {prob:.2f}"
                         
                         cv2.putText(overlay, label_text, (x1, max(y1 - 10, 0)),
                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color255, 1, cv2.LINE_AA)
