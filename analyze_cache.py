@@ -64,7 +64,8 @@ def analyze_cache(cache_dir):
 
 if __name__ == "__main__":
     # Use the specific path found or take from command line
-    default_path = "/workspace/sam3_batch_results_music_room/cache"
+    # default_path = "/workspace/sam3_batch_results_music_room/cache"
+    default_path = "/workspace/sam3_batch_results_all_input_images_0/cache"
     target_dir = sys.argv[1] if len(sys.argv) > 1 else default_path
     
     if not os.path.exists(target_dir):

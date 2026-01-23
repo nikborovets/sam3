@@ -490,9 +490,92 @@ def run_config_seq1_2711():
     print("Done!")
     return merged
 
+def run_3023_16_01_2026_config():
+    prompts = [
+        # --- Архитектура и фон (Room Structure) ---
+        "wall",
+        "ceiling",
+        "floor",
+        "baseboard",
+        "concrete",
+        "column",
+        "window",
+        "door",
+        "pipe",
+
+        # --- Элементы на стенах (Fixtures) ---
+        "socket",
+        "switch",
+        "light switch",
+        "window blind",
+        "door handle",
+        "blackboard",
+        "black plate",
+        "paperboard",
+
+        # --- Крупная мебель (Large Furniture) ---
+        "wardrobe",
+        "cabinet wall",
+        "shelves",
+        "cabinet door",
+        "glass",
+        "inside of the cabinet",
+        "sofa",
+        "armrest",
+        "cushion",
+        "chair",
+        "table",
+        "bin",
+
+        # --- Предметы в шкафу/на полках (Objects on shelves/background) ---
+        "cardboard boxes",
+        "box",
+        "router box",
+        "package",
+        "frame",
+        "book",
+        "helmet",
+        "vase",
+        "mug",
+        "black thing",
+        "statuette",
+        "backpack",
+        "pump",
+        
+        # --- Техника на столе ---
+        "monitor",
+        "imac",
+
+        # --- Мелкие предметы на столе/переднем плане (Objects on desk/foreground) ---
+        "keyboard",
+        "touchpad",
+        "mouse",
+        "usb adapter",
+        "wire",
+        "plug",
+        "battery",
+        "paper",
+        "screwdriver",
+    ]
+    merged = fill_config(
+        # video_path="/workspace/edited_color_and_edge_sharpness_every_3_frame_new",
+        video_path="/workspace/2-half-blind-no-light-day_e3f",
+        output_dir="/workspace/sam3_batch_results_3023_16_01_2026",
+        output_video_name="merged_2-half-blind-no-light-day_3023_no_image.mp4",
+        prompts=prompts,
+        show_box=False,
+        show_label=False,
+        show_mask=True,
+        show_original_image=False,
+        save_frames=True)
+    print("Done!")
+    return merged
+
+
 if __name__ == "__main__":
     # run_config_1()
     # run_config_2()
     # run_big_config()
     # run_music_room_config()
-    run_config_seq1_2711()
+    # run_config_seq1_2711()
+    run_3023_16_01_2026_config()

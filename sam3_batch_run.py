@@ -78,24 +78,27 @@ class SAM3BatchProcessor:
 
     def reset_session(self):
         if self.session_id:
-            logger.info("Resetting session...")
+            logger.info(f"Closing session {self.session_id} to free memory...")
             self.predictor.handle_request(
                 request=dict(
-                    type="reset_session",
+                    type="close_session",
                     session_id=self.session_id,
                 )
             )
+            self.session_id = None
             # Force garbage collection
             gc.collect()
             torch.cuda.empty_cache()
 
-    def _create_chunks(self):
+    def _create_random_chunks(self):
         """
         Splits the total list of video frames into segments of random length
         (e.g., 350 to 450 frames) to avoid OOM.
         """
+
+        slice_size = [370, 450] # [min, max]
         # slice_size = [350, 450] # [min, max]
-        slice_size = [300, 350] # [min, max]
+        # slice_size = [300, 350] # [min, max]
         # slice_size = [220, 350] # [min, max]
         # slice_size = [20, 25] # [min, max]
         total_frames = len(self.video_frames)
@@ -115,6 +118,27 @@ class SAM3BatchProcessor:
             
         logger.info(f"Created {len(chunks)} chunks with sizes: {[(e-s) for s,e in chunks]}")
         return chunks
+    
+    def _create_sequential_chunks(self):
+        """
+        Splits the total list of video frames into segments of equal length
+        (e.g., 600 frames) to avoid OOM.
+        """
+        slice_size = 605 # frames
+        total_frames = len(self.video_frames)
+        chunks = []
+        current_idx = 0
+        while current_idx < total_frames:
+            remaining = total_frames - current_idx
+            if remaining <= slice_size:
+                chunk_size = remaining
+            else:
+                chunk_size = slice_size
+            end_idx = current_idx + chunk_size
+            chunks.append((current_idx, end_idx))
+            current_idx = end_idx
+        logger.info(f"Created {len(chunks)} chunks with sizes: {[(e-s) for s,e in chunks]}")
+        return chunks
 
     def process_prompt(self, prompt_text, force_recompute=False):
         """Process a single text prompt and save results using chunking"""
@@ -131,18 +155,19 @@ class SAM3BatchProcessor:
 
         logger.info(f"Processing prompt: '{prompt_text}' with chunking...")
         
-        chunks = self._create_chunks()
+        # chunks = self._create_random_chunks()
+        chunks = self._create_sequential_chunks()
         all_outputs = {}
         
         try:
-            for i, (start_idx, end_idx) in enumerate(chunks):
+            for chunk_idx, (start_idx, end_idx) in enumerate(chunks):
                 retry_count = 0
                 max_retries = 1
                 success = False
                 
                 while not success:
                     try:
-                        logger.info(f"Processing chunk {i+1}/{len(chunks)}: frames {start_idx} to {end_idx} (Attempt {retry_count + 1})")
+                        logger.info(f"Processing chunk {chunk_idx+1}/{len(chunks)}: frames {start_idx} to {end_idx} (Attempt {retry_count + 1})")
                         
                         # Load frames for this chunk
                         chunk_paths = self.video_frames[start_idx:end_idx]
@@ -174,7 +199,15 @@ class SAM3BatchProcessor:
                         ):
                             local_idx = response["frame_index"]
                             global_idx = start_idx + local_idx
-                            all_outputs[global_idx] = response["outputs"]
+                            
+                            # Add chunk offset to object IDs to ensure uniqueness across chunks
+                            # This enables correct stitching later using IoU
+                            chunk_id_offset = chunk_idx * 1000
+                            outputs = response["outputs"]
+                            if "out_obj_ids" in outputs:
+                                outputs["out_obj_ids"] = [oid + chunk_id_offset for oid in outputs["out_obj_ids"]]
+                            
+                            all_outputs[global_idx] = outputs
                         
                         # Clean up chunk resources
                         del chunk_images
@@ -183,7 +216,7 @@ class SAM3BatchProcessor:
                         
                     except torch.cuda.OutOfMemoryError:
                         retry_count += 1
-                        logger.warning(f"OOM Error processing chunk {i+1}. Attempt {retry_count}/{max_retries}")
+                        logger.warning(f"OOM Error processing chunk {chunk_idx+1}. Attempt {retry_count}/{max_retries}")
                         
                         # Aggressive cleanup: destroy predictor and force full re-initialization
                         self.reset_session()
@@ -200,7 +233,7 @@ class SAM3BatchProcessor:
                         # self.initialize_predictor()
                         
                         if retry_count >= max_retries:
-                            logger.error(f"Failed to process chunk {i+1} after {max_retries} attempts due to OOM.")
+                            logger.error(f"Failed to process chunk {chunk_idx+1} after {max_retries} attempts due to OOM.")
                             raise
 
             # Save to cache
