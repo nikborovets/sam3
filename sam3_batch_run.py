@@ -2,20 +2,28 @@ import os
 import torch
 import numpy as np
 import cv2
-from PIL import Image
-import json
 import glob
-from tqdm import tqdm
-import matplotlib.pyplot as plt
-from sam3.model_builder import build_sam3_video_predictor
-from sam3.visualization_utils import load_frame, prepare_masks_for_visualization, render_masklet_frame
-from sam3.logger import get_logger
-
-import logging
 import gc
+import sys
+import logging
+from tqdm import tqdm
+from PIL import Image
+
+# Append workspace root to path if needed
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+
+from sam3.model_builder import build_sam3_video_predictor
+from sam3.visualization_utils import load_frame
+from sam3.logger import get_logger
 
 # Configure logging
 logger = get_logger(__name__, level=logging.INFO)
+
+try:
+    from tg_notifier import notify_error
+except ImportError:
+    logger.warning("Notifier not found, using dummy function")
+    def notify_error(e, msg=""): print(f"Notifier not found: {msg} {e}")
 
 class SAM3BatchProcessor:
     def __init__(self, video_path, output_dir, device='cuda'):
@@ -49,24 +57,26 @@ class SAM3BatchProcessor:
             logger.info(f"Found {len(frames)} frames")
             return frames
         else:
-            # Handle video file - extract to temp dir or read on fly? 
-            # For simplicity let's assume frames folder for now as in the example
-            # If it's mp4, we should probably extract it first
             raise NotImplementedError("Direct video file support not fully implemented, please provide directory with frames")
 
     def initialize_predictor(self):
         if self.predictor is None:
             logger.info("Initializing SAM3 predictor...")
+            # Revert to build_sam3_video_predictor which returns Sam3VideoPredictorMultiGPU
+            # This class has handle_request and handle_stream_request methods
             self.predictor = build_sam3_video_predictor()
+            logger.info("SAM3 predictor initialized")
 
     def start_session(self, resource=None):
         self.initialize_predictor()
         logger.info("Starting inference session...")
         try:
+            # Use handle_request for start_session
+            video_path = resource if resource is not None else self.video_path
             response = self.predictor.handle_request(
                 request=dict(
                     type="start_session",
-                    resource_path=resource if resource is not None else self.video_path,
+                    resource_path=video_path,
                 )
             )
             self.session_id = response["session_id"]
@@ -77,14 +87,18 @@ class SAM3BatchProcessor:
             raise
 
     def reset_session(self):
-        if self.session_id:
+        if self.session_id and self.predictor:
             logger.info(f"Closing session {self.session_id} to free memory...")
-            self.predictor.handle_request(
-                request=dict(
-                    type="close_session",
-                    session_id=self.session_id,
+            try:
+                self.predictor.handle_request(
+                    request=dict(
+                        type="close_session",
+                        session_id=self.session_id,
+                    )
                 )
-            )
+            except Exception as e:
+                logger.warning(f"Error closing session: {e}")
+            
             self.session_id = None
             # Force garbage collection
             gc.collect()
@@ -195,13 +209,15 @@ class SAM3BatchProcessor:
                             request=dict(
                                 type="propagate_in_video",
                                 session_id=self.session_id,
+                                propagation_direction="both",
                             )
                         ):
                             local_idx = response["frame_index"]
                             global_idx = start_idx + local_idx
                             
                             # Add chunk offset to object IDs to ensure uniqueness across chunks
-                            # This enables correct stitching later using IoU
+                            # This enables correct stitching later using IoU if needed, 
+                            # though for text prompts usually ID=0 is the main one.
                             chunk_id_offset = chunk_idx * 1000
                             outputs = response["outputs"]
                             if "out_obj_ids" in outputs:
@@ -244,6 +260,7 @@ class SAM3BatchProcessor:
         except Exception as e:
             if not isinstance(e, torch.cuda.OutOfMemoryError): # OOM is already handled/raised above
                 logger.error(f"Error processing prompt '{prompt_text}': {e}")
+                notify_error(e, f"Ошибка в SAM3BatchProcessor.process_prompt для промпта: {prompt_text}")
             raise
 
     def merge_results(self, all_outputs):
@@ -401,7 +418,11 @@ class SAM3BatchProcessor:
                                            (img.shape[1], img.shape[0]), 
                                            interpolation=cv2.INTER_NEAREST)
                         
-                        mask_bool = mask > 0.5
+                        # Handle both bool and float masks
+                        if mask.dtype == bool:
+                            mask_bool = mask
+                        else:
+                            mask_bool = mask > 0.5
                         # If showing on black background (no original image), use full opacity for mask
                         alpha = 0.5 if show_original_image else 1.0
                         
