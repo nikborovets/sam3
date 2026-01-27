@@ -143,6 +143,19 @@ def main():
                 labels=labels,
                 clear_old_points=False,
             )
+            
+            # 5.3 Mask (Advanced)
+            # Добавляем полную бинарную маску как самый сильный промпт.
+            # Благодаря propagate_preflight=True, она корректно консолидируется в память.
+            mask_2d = torch.from_numpy(mask).to(args.device).to(torch.float32).squeeze()
+            if mask_2d.ndim == 2:
+                logger.info(f"Adding MASK prompt for obj_id={ann_obj_id} on frame {frame_idx}")
+                predictor.add_new_mask(
+                    inference_state=inference_state,
+                    frame_idx=frame_idx,
+                    obj_id=ann_obj_id,
+                    mask=mask_2d
+                )
         
         prompt_frame_indices.add(frame_idx)
 
