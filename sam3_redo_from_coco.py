@@ -57,8 +57,15 @@ def decode_rle_mask(segmentation, size):
 def main():
     # --- DEFAULT PATHS ---
     DEFAULT_VIDEO_PATH = "/workspace/2-half-blind-no-light-day_e3f"
-    DEFAULT_COCO_JSON = "/workspace/sam3/0example_coco_anno.json"
+    # DEFAULT_COCO_JSON = "/workspace/sam3/0example_coco_anno.json"
+    # DEFAULT_COCO_JSON = "/workspace/sam3/coco_deck_pump.json"
+    # DEFAULT_COCO_JSON = "/workspace/sam3/coco_deck_pump_statuet.json"
+    # DEFAULT_COCO_JSON = "/workspace/sam3/coco_deck_pump_statuet_column.json"
+    # DEFAULT_COCO_JSON = "/workspace/sam3/coco_deck_pump_statuet_column_with_combo.json"
+    DEFAULT_COCO_JSON = "/workspace/sam3/coco_deck_pump_statuet_column_with_combo0.json"
     DEFAULT_OUTPUT_DIR = "/workspace/sam3_redo_results"
+
+    DEFAULT_JOIN_OBJECT_JSON_PATH = "/workspace/sam3/coco_join_objects.json"
     # ---------------------
 
     parser = argparse.ArgumentParser()
@@ -67,7 +74,39 @@ def main():
     parser.add_argument("--output_dir", type=str, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--obj_id_offset", type=int, default=100)
+    parser.add_argument("--id_groups", type=str, default=DEFAULT_JOIN_OBJECT_JSON_PATH, 
+                        help="Строка JSON со списком групп ID для склейки: '[[105, 108], [200, 205]]'")
     args = parser.parse_args()
+
+    # Загрузка и преобразование групп ID в маппинг
+    id_map = {}
+    if args.id_groups:
+        try:
+            # Если это путь к файлу
+            if os.path.isfile(args.id_groups):
+                with open(args.id_groups, 'r') as f:
+                    groups = json.load(f)
+            # Если это строка JSON
+            else:
+                groups = json.loads(args.id_groups)
+            
+            if not isinstance(groups, list):
+                raise ValueError("id_groups must be a list of lists")
+
+            # Преобразование [[A, B], [C, D, E]] -> {A:A, B:A, C:C, D:C, E:C}
+            for group in groups:
+                if not group: continue
+                # Используем первый ID группы как Target ID для всех членов группы
+                target_id = int(group[0]) + args.obj_id_offset # Добавляем оффсет сразу, чтобы не конфликтовать
+                for member_id in group:
+                    id_map[int(member_id)] = target_id
+            
+            logger.info(f"Loaded ID groups. Generated mapping size: {len(id_map)}")
+            logger.debug(f"Mapping: {id_map}")
+
+        except Exception as e:
+            logger.error(f"Failed to parse id_groups: {e}")
+            return
 
     logger.info(f"Loading video from {args.video_path}")
     logger.info(f"Loading COCO from {args.coco_json}")
@@ -112,7 +151,15 @@ def main():
             continue
             
         frame_idx = filename_to_idx[img_basename]
-        ann_obj_id = ann['id'] + args.obj_id_offset
+        
+        # Определяем целевой ID объекта для SAM3
+        raw_id = ann['id']
+        if raw_id in id_map:
+            ann_obj_id = id_map[raw_id]
+            logger.info(f"ReID: Merging CVAT ID {raw_id} -> SAM ID {ann_obj_id}")
+        else:
+            # Если объект не в группе склейки, он получает свой уникальный ID
+            ann_obj_id = raw_id + args.obj_id_offset
         
         # 5.1 Box
         bbox = ann.get('bbox')
@@ -166,7 +213,8 @@ def main():
     # 6. Propagation
     logger.info("--- STARTING PROPAGATION ---")
     video_segments = {}
-    MAX_TRACK = 100
+    # MAX_TRACK = 300
+    MAX_TRACK = None
     
     min_idx = min(prompt_frame_indices)
     max_idx = max(prompt_frame_indices)
