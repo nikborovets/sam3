@@ -9,7 +9,9 @@ import argparse
 from tqdm import tqdm
 import sys
 import colorsys
+import yaml
 from sam3.logger import get_logger
+
 
 # Настройка путей
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -30,6 +32,12 @@ except ImportError:
 
 # Настройка логгера
 logger = get_logger("sam3_redo_coco", level=logging.INFO)
+
+try:
+    from tg_notifier import notify_error, send_message
+except ImportError:
+    logger.warning("Notifier not found, using dummy function")
+    def notify_error(e, msg=""): print(f"Notifier not found: {msg} {e}")
 
 def generate_bright_colors(n=256):
     """Генерация ярких цветов (из sam3_batch_run.py)."""
@@ -62,10 +70,12 @@ def main():
     # DEFAULT_COCO_JSON = "/workspace/sam3/coco_deck_pump_statuet.json"
     # DEFAULT_COCO_JSON = "/workspace/sam3/coco_deck_pump_statuet_column.json"
     # DEFAULT_COCO_JSON = "/workspace/sam3/coco_deck_pump_statuet_column_with_combo.json"
-    DEFAULT_COCO_JSON = "/workspace/sam3/coco_deck_pump_statuet_column_with_combo0.json"
+    # DEFAULT_COCO_JSON = "/workspace/sam3/coco_deck_pump_statuet_column_with_combo0.json"
+    DEFAULT_COCO_JSON = "/workspace/sam3/coco_all_redo_29-01_00-38.json"
     DEFAULT_OUTPUT_DIR = "/workspace/sam3_redo_results"
 
-    DEFAULT_JOIN_OBJECT_JSON_PATH = "/workspace/sam3/coco_join_objects.json"
+    # DEFAULT_JOIN_OBJECT_PATH = "/workspace/sam3/coco_join_objects.json"
+    DEFAULT_JOIN_OBJECT_PATH = "/workspace/sam3/coco_join_objects.yml"
     # ---------------------
 
     parser = argparse.ArgumentParser()
@@ -74,7 +84,7 @@ def main():
     parser.add_argument("--output_dir", type=str, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--obj_id_offset", type=int, default=100)
-    parser.add_argument("--id_groups", type=str, default=DEFAULT_JOIN_OBJECT_JSON_PATH, 
+    parser.add_argument("--id_groups", type=str, default=DEFAULT_JOIN_OBJECT_PATH, 
                         help="Строка JSON со списком групп ID для склейки: '[[105, 108], [200, 205]]'")
     args = parser.parse_args()
 
@@ -85,13 +95,23 @@ def main():
             # Если это путь к файлу
             if os.path.isfile(args.id_groups):
                 with open(args.id_groups, 'r') as f:
-                    groups = json.load(f)
-            # Если это строка JSON
+                    if args.id_groups.lower().endswith(('.yaml', '.yml')):
+                        import yaml
+                        groups = yaml.safe_load(f)
+                        logger.info(f"Loaded ID groups from YAML: {args.id_groups}")
+                    else:
+                        groups = json.load(f)
+                        logger.info(f"Loaded ID groups from JSON: {args.id_groups}")
+            # Если это строка (пробуем JSON, потом YAML)
             else:
-                groups = json.loads(args.id_groups)
+                try:
+                    groups = json.loads(args.id_groups)
+                except:
+                    import yaml
+                    groups = yaml.safe_load(args.id_groups)
             
             if not isinstance(groups, list):
-                raise ValueError("id_groups must be a list of lists")
+                raise ValueError(f"id_groups must be a list of lists, got {type(groups)}")
 
             # Преобразование [[A, B], [C, D, E]] -> {A:A, B:A, C:C, D:C, E:C}
             for group in groups:
@@ -107,7 +127,7 @@ def main():
         except Exception as e:
             logger.error(f"Failed to parse id_groups: {e}")
             return
-
+    logger.info(groups)
     logger.info(f"Loading video from {args.video_path}")
     logger.info(f"Loading COCO from {args.coco_json}")
 
@@ -302,4 +322,10 @@ def main():
     logger.info(f"SUCCESS: Results saved to {args.output_dir}")
 
 if __name__ == "__main__":
-    main()
+    try:
+        send_message("Batch run started")
+        main()
+        send_message("Batch run completed successfully")
+    except Exception as e:
+        notify_error(e, "Критическая ошибка при выполнении batch_run_configs.py")
+        raise
