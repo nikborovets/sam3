@@ -8,7 +8,6 @@ import sys
 import logging
 from tqdm import tqdm
 from PIL import Image
-# Append workspace root to path if needed
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
 from sam3.model_builder import build_sam3_video_predictor
@@ -17,7 +16,6 @@ from sam3.logger import get_logger
 from sam3.model.sam3_video_predictor import Sam3VideoPredictorMultiGPU
 
 
-# Configure logging
 logger = get_logger(__name__)
 
 try:
@@ -49,7 +47,6 @@ class SAM3BatchProcessor:
         if os.path.isdir(self.video_path):
             frames = sorted(glob.glob(os.path.join(self.video_path, "*.png")) + 
                           glob.glob(os.path.join(self.video_path, "*.jpg")))
-            # Try numeric sort first
             try:
                 frames.sort(key=lambda x: int(os.path.splitext(os.path.basename(x))[0]))
             except:
@@ -63,8 +60,6 @@ class SAM3BatchProcessor:
     def initialize_predictor(self):
         if self.predictor is None:
             logger.info("Initializing SAM3 predictor...")
-            # Revert to build_sam3_video_predictor which returns Sam3VideoPredictorMultiGPU
-            # This class has handle_request and handle_stream_request methods
             self.predictor = build_sam3_video_predictor()
             logger.info("SAM3 predictor initialized")
 
@@ -72,7 +67,6 @@ class SAM3BatchProcessor:
         self.initialize_predictor()
         logger.info("Starting inference session...")
         try:
-            # Use handle_request for start_session
             video_path = resource if resource is not None else self.video_path
             response = self.predictor.handle_request(
                 request=dict(
@@ -101,7 +95,7 @@ class SAM3BatchProcessor:
                 logger.warning(f"Error closing session: {e}")
             
             self.session_id = None
-            # Force garbage collection
+
             gc.collect()
             torch.cuda.empty_cache()
 
@@ -164,7 +158,6 @@ class SAM3BatchProcessor:
             logger.info(f"Loading cached results for '{prompt_text}'...")
             return np.load(cache_file, allow_pickle=True)['outputs'].item()
 
-        # Check if predictor/session is initialized before processing new prompts
         if self.predictor is None:
             self.initialize_predictor()
 
@@ -196,6 +189,7 @@ class SAM3BatchProcessor:
                         
                         # Add prompt
                         # Note: We apply the text prompt to the first frame of the chunk (relative index 0)
+                        # TODO: I shoulf try to apply prompt to the last frame of the chunk to use IoU for id association
                         self.predictor.handle_request(
                             request=dict(
                                 type="add_prompt",
@@ -235,7 +229,6 @@ class SAM3BatchProcessor:
                         retry_count += 1
                         logger.warning(f"OOM Error processing chunk {chunk_idx+1}. Attempt {retry_count}/{max_retries}")
                         
-                        # Aggressive cleanup: destroy predictor and force full re-initialization
                         self.reset_session()
                         
                         if 'chunk_images' in locals():
@@ -253,13 +246,13 @@ class SAM3BatchProcessor:
                             logger.error(f"Failed to process chunk {chunk_idx+1} after {max_retries} attempts due to OOM.")
                             raise
 
-            # Save to cache
+            # cache
             np.savez_compressed(cache_file, outputs=all_outputs)
             
             return all_outputs
             
         except Exception as e:
-            if not isinstance(e, torch.cuda.OutOfMemoryError): # OOM is already handled/raised above
+            if not isinstance(e, torch.cuda.OutOfMemoryError):
                 logger.error(f"Error processing prompt '{prompt_text}': {e}")
                 notify_error(e, f"Ошибка в SAM3BatchProcessor.process_prompt для промпта: {prompt_text}")
             raise
@@ -348,19 +341,16 @@ class SAM3BatchProcessor:
         
         video_out_path = os.path.join(self.vis_dir, output_video_name)
         
-        # Directory for saved frames
         frames_out_dir = os.path.join(self.vis_dir, os.path.splitext(output_video_name)[0] + "_frames")
         if save_frames:
             os.makedirs(frames_out_dir, exist_ok=True)
         
-        # Temp video file
         temp_path = os.path.join(self.vis_dir, "temp_render.mp4")
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         writer = cv2.VideoWriter(temp_path, fourcc, fps, (w, h))
         
         # from sam3.visualization_utils import COLORS
         
-        # Generate bright distinct colors ensuring visibility on black background
         def generate_bright_colors(n=256):
             import colorsys
             colors = []
@@ -378,7 +368,7 @@ class SAM3BatchProcessor:
                 colors.append(rgb)
             return np.array(colors)
             
-        COLORS = generate_bright_colors(max(100, len(self.video_frames))) # Ensure enough colors
+        COLORS = generate_bright_colors(max(100, len(self.video_frames)))
         
         for frame_idx in tqdm(sorted(merged_frames.keys())):
             if frame_idx >= len(self.video_frames):
@@ -386,7 +376,6 @@ class SAM3BatchProcessor:
                 
             img = load_frame(self.video_frames[frame_idx])
             
-            # Ensure img is uint8
             if img.dtype != np.uint8:
                 if img.max() <= 1.0:
                     img = (img * 255).astype(np.uint8)
@@ -413,18 +402,16 @@ class SAM3BatchProcessor:
                     
                     if show_mask:
                         mask = outputs["out_binary_masks"][i]
-                        # Resize if needed (though usually matches frame)
                         if mask.shape != img.shape[:2]:
                             mask = cv2.resize(mask.astype(np.float32), 
                                            (img.shape[1], img.shape[0]), 
                                            interpolation=cv2.INTER_NEAREST)
                         
-                        # Handle both bool and float masks
                         if mask.dtype == bool:
                             mask_bool = mask
                         else:
                             mask_bool = mask > 0.5
-                        # If showing on black background (no original image), use full opacity for mask
+
                         alpha = 0.5 if show_original_image else 1.0
                         
                         for c in range(3):
@@ -453,7 +440,7 @@ class SAM3BatchProcessor:
                             pass
                             
                         # prob = outputs["out_probs"][i]
-                        prompt = outputs["prompt_source"][i] # Optional: show prompt name
+                        prompt = outputs["prompt_source"][i]
                         label_text = f"id={obj_id}"
                         # label_text = f"{obj_id}, {prompt}, {prob:.2f}"
                         
@@ -464,20 +451,14 @@ class SAM3BatchProcessor:
             writer.write(bgr_frame)
             
             if save_frames:
-                # Use original filename if possible, otherwise fall back to index
                 original_path = self.video_frames[frame_idx]
                 original_name = os.path.basename(original_path)
                 frame_filename = os.path.join(frames_out_dir, original_name)
-                # If extension is not png/jpg in original, we force it to match what we write or keep it?
-                # cv2.imwrite determines format by extension.
-                # Let's ensure we save as png or jpg correctly.
-                # If user wants exact original name, we trust cv2 handles the extension provided in original_name
-                # unless it's not an image extension supported by imwrite.
+
                 cv2.imwrite(frame_filename, bgr_frame)
             
         writer.release()
         
-        # Convert with ffmpeg for compatibility
         if os.path.exists(video_out_path):
             os.remove(video_out_path)
             
@@ -497,57 +478,57 @@ class SAM3BatchProcessor:
         
         logger.info("Done!")
 
-if __name__ == "__main__":
-    VIDEO_PATH = "/workspace/ivan_images_slice" 
-    OUTPUT_DIR = "/workspace/sam3_batch_results"
-    PROMPTS = [
-        "chair", 
-        "table", 
-        "keyboard", 
-        "touchpad",
-        "mouse",
-        "usb hub",
-        "monitor",
-        "imac",
-        "wires",
-        "cushion",
-        "sofa",
-        "bin",
-        "screwdriver",
-        "window",
-        "window blind",
-        "door",
-        "door handle",
-        "floor",
-        "wall",
-        "ceiling",
-        "pipe",
-        "socket",
-        "plug",
-        "switch",
-        "column",
-        "concrete",
-        ]
+# if __name__ == "__main__":
+#     VIDEO_PATH = "/workspace/ivan_images_slice" 
+#     OUTPUT_DIR = "/workspace/sam3_batch_results"
+#     PROMPTS = [
+#         "chair", 
+#         "table", 
+#         "keyboard", 
+#         "touchpad",
+#         "mouse",
+#         "usb hub",
+#         "monitor",
+#         "imac",
+#         "wires",
+#         "cushion",
+#         "sofa",
+#         "bin",
+#         "screwdriver",
+#         "window",
+#         "window blind",
+#         "door",
+#         "door handle",
+#         "floor",
+#         "wall",
+#         "ceiling",
+#         "pipe",
+#         "socket",
+#         "plug",
+#         "switch",
+#         "column",
+#         "concrete",
+#         ]
     
-    processor = SAM3BatchProcessor(VIDEO_PATH, OUTPUT_DIR)
+#     processor = SAM3BatchProcessor(VIDEO_PATH, OUTPUT_DIR)
     
-    all_outputs = {}
-    for prompt in PROMPTS:
-        all_outputs[prompt] = processor.process_prompt(prompt)
+#     all_outputs = {}
+#     for prompt in PROMPTS:
+#         all_outputs[prompt] = processor.process_prompt(prompt)
         
-    merged = processor.merge_results(all_outputs)
+#     merged = processor.merge_results(all_outputs)
     
-    processor.visualize_merged(
-        merged, 
-        output_video_name="merged_output_no_image.mp4",
-        show_box=False,
-        show_label=False,
-        show_mask=True,
-        show_original_image=False,
-        save_frames=True
-    )
+#     processor.visualize_merged(
+#         merged, 
+#         output_video_name="merged_output_no_image.mp4",
+#         show_box=False,
+#         show_label=False,
+#         show_mask=True,
+#         show_original_image=False,
+#         save_frames=True
+#     )
     
-    # processor.visualize_merged(merged, output_video_name="merged_full.mp4", show_box=True, show_label=True)
+#     # processor.visualize_merged(merged, output_video_name="merged_full.mp4", show_box=True, show_label=True)
     
-    logger.info("Done!")
+#     logger.info("Done!")
 
