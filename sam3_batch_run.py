@@ -8,16 +8,17 @@ import sys
 import logging
 from tqdm import tqdm
 from PIL import Image
-
 # Append workspace root to path if needed
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
 from sam3.model_builder import build_sam3_video_predictor
 from sam3.visualization_utils import load_frame
 from sam3.logger import get_logger
+from sam3.model.sam3_video_predictor import Sam3VideoPredictorMultiGPU
+
 
 # Configure logging
-logger = get_logger(__name__, level=logging.INFO)
+logger = get_logger(__name__)
 
 try:
     from tg_notifier import notify_error
@@ -38,7 +39,7 @@ class SAM3BatchProcessor:
         os.makedirs(self.masks_dir, exist_ok=True)
         
         self.device = device
-        self.predictor = None
+        self.predictor: Sam3VideoPredictorMultiGPU = None
         self.session_id = None
         self.video_frames = self._load_video_frames()
         
