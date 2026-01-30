@@ -1,4 +1,11 @@
 from sam3_batch_run import SAM3BatchProcessor
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+try:
+    from tg_notifier import notify_error, send_message
+except ImportError:
+    def notify_error(e, msg=""): print(f"Notifier not found: {msg} {e}")
 
 def fill_config(
     video_path: str,
@@ -28,6 +35,15 @@ def fill_config(
         show_original_image=show_original_image,
         save_frames=save_frames
     )
+    # processor.visualize_merged(
+    #     merged, 
+    #     output_video_name="merged_2-half-blind-no-light-day_3023_with_image.mp4",
+    #     show_box=show_box,
+    #     show_label=show_label,
+    #     show_mask=show_mask,
+    #     show_original_image=not show_original_image,
+    #     save_frames=not save_frames
+    # )
 
     return merged
 
@@ -495,6 +511,7 @@ def run_3023_16_01_2026_config():
         # --- Архитектура и фон (Room Structure) ---
         "wall",
         "ceiling",
+        "illumination",
         "floor",
         "baseboard",
         "concrete",
@@ -502,6 +519,8 @@ def run_3023_16_01_2026_config():
         "window",
         "door",
         "pipe",
+        # "radiator",
+        "ventilation",
 
         # --- Элементы на стенах (Fixtures) ---
         "socket",
@@ -514,6 +533,7 @@ def run_3023_16_01_2026_config():
         "paperboard",
 
         # --- Крупная мебель (Large Furniture) ---
+        "cabinet",
         "wardrobe",
         "cabinet wall",
         "shelves",
@@ -557,6 +577,7 @@ def run_3023_16_01_2026_config():
         "paper",
         "screwdriver",
     ]
+
     merged = fill_config(
         # video_path="/workspace/edited_color_and_edge_sharpness_every_3_frame_new",
         video_path="/workspace/2-half-blind-no-light-day_e3f",
@@ -567,15 +588,22 @@ def run_3023_16_01_2026_config():
         show_label=False,
         show_mask=True,
         show_original_image=False,
-        save_frames=True)
+        save_frames=True
+        )
     print("Done!")
     return merged
 
 
 if __name__ == "__main__":
-    # run_config_1()
-    # run_config_2()
-    # run_big_config()
-    # run_music_room_config()
-    # run_config_seq1_2711()
-    run_3023_16_01_2026_config()
+    try:
+        send_message("Batch run started")
+        # run_config_1()
+        # run_config_2()
+        # run_big_config()
+        # run_music_room_config()
+        # run_config_seq1_2711()
+        run_3023_16_01_2026_config()
+        send_message("Batch run completed successfully")
+    except Exception as e:
+        notify_error(e, "Критическая ошибка при выполнении batch_run_configs.py")
+        raise

@@ -184,7 +184,10 @@ def main():
         torch.autocast("cuda", dtype=torch.bfloat16).__enter__()
 
     # Init State (Load Frames once)
-    inference_state = predictor.init_state(video_path=args.video_path)
+    inference_state = predictor.init_state(
+        video_path=args.video_path, 
+        # async_loading_frames=False,
+        )
     video_width = inference_state["video_width"]
     video_height = inference_state["video_height"]
     logger.info(f"Video resolution: {video_width}x{video_height}")
