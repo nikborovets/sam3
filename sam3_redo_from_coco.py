@@ -18,14 +18,12 @@ from sam3.model.sam3_tracking_predictor import Sam3TrackerPredictor
 from sam3.model.sam3_image import Sam3ImageOnVideoMultiGPU
 from sam3.model.vl_combiner import SAM3VLBackbone
 
-# Настройка путей
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(CURRENT_DIR, ".."))
 
 from sam3.model_builder import build_sam3_video_model
 from pycocotools import mask as mask_utils
 
-# Конфигурация логгера
 logger = get_logger("sam3_redo_coco", level=logging.INFO)
 
 try:
@@ -206,10 +204,16 @@ def main():
     with open(args.coco_json, 'r') as f:
         coco_data = json.load(f)
     images_map = {img['id']: img['file_name'] for img in coco_data['images']}
+    
+    # Create category mapping: id -> name
+    cats_map = {cat['id']: cat['name'] for cat in coco_data.get('categories', [])}
 
     # Группируем промпты по объектам
     obj_prompts = defaultdict(list)
     
+    # Map raw_id to category_id
+    raw_id_to_cat_id = {ann['id']: ann['category_id'] for ann in coco_data['annotations']}
+
     logger.info("Parsing annotations and grouping by object...")
     for ann in tqdm(coco_data['annotations'], desc="Grouping annotations"):
         img_filename = images_map.get(ann['image_id'])
@@ -238,7 +242,6 @@ def main():
 
     logger.info(f"Found {len(obj_prompts)} unique objects to process.")
     
-    # DEBUG: Показать состав групп
     for target_id, prompts in obj_prompts.items():
         raw_ids = set(p['raw_id'] for p in prompts)
         frames = sorted(list(set(p['frame_idx'] for p in prompts)))
@@ -254,17 +257,13 @@ def main():
     # --- 2. SEQUENTIAL PROCESSING (OBJECT-WISE) ---
     MAX_TRACK = None # None means track until end/start of video
     
-    # Проходим по каждому объекту отдельно
     for obj_id, prompts in tqdm(obj_prompts.items(), desc="Processing Objects"):
         cache_path = os.path.join(cache_dir, f"obj_{obj_id}.npz")
         
-        # Если кэш уже есть, можно пропустить (опционально, сейчас перезаписываем для надежности)
         # if os.path.exists(cache_path): continue
 
-        # ВАЖНО: Очищаем состояние трекера перед новым объектом
         log_memory_usage("Before Reset")
         
-        # Освобождаем память от предыдущего объекта
         import gc
         gc.collect()
         torch.cuda.empty_cache()
@@ -275,7 +274,7 @@ def main():
         
         prompt_frame_indices = set()
         
-        # Инъекция всех промптов для текущего объекта
+        # Инъекция всех промптов в сессию для текущего объекта
         for p in prompts:
             frame_idx = p['frame_idx']
             bbox = p['bbox']
@@ -329,58 +328,110 @@ def main():
             continue
 
         # Propagation for this single object
-        obj_results = {}
+        obj_results = {} # frame_idx -> dict (matching batch_run format)
         min_idx = min(prompt_frame_indices)
         max_idx = max(prompt_frame_indices)
 
+        # Get category name for this object (assuming homogeneous group)
+        cat_name = "unknown"
+        if prompts:
+            rid = prompts[0]['raw_id']
+            cid = raw_id_to_cat_id.get(rid)
+            cat_name = cats_map.get(cid, "unknown")
+
+        def process_response(response, results_dict):
+            # frame_idx, obj_ids, _            , video_res_masks, _          = response
+            # frame_idx, obj_ids, low_res_masks, video_res_masks, obj_scores = response
+
+            # frame_idx (int): индекс текущего кадра в видео
+            # obj_ids (list): отслеживаемые ID объектов на кадре
+            # low_res_masks (torch.Tensor): маски объектов в низком разрешении (N, 1, H_low, W_low)
+            #       H_low, W_low = 288, 288. являются логитами.
+            # video_res_masks (torch.Tensor): маски объектов в оригинальном разрешении видео (N, 1, H_video, W_video)
+            #       H_video, W_video = 720, 1280
+            # obj_scores (torch.Tensor): уверенность модели для каждого объекта
+            frame_idx, out_obj_ids, out_mask_logits, video_res_masks, out_scores = response
+            
+            current_frame_data = {
+                "out_obj_ids": [],
+                "out_binary_masks": [],
+                "out_probs": [],
+                "out_boxes_xywh": [],
+                "prompt_source": [],
+                "low_res_logits": []
+            }
+            
+            found = False
+            for i, out_id in enumerate(out_obj_ids):
+                if out_id == obj_id:
+                    found = True
+                    # Masks
+                    mask_bool = (video_res_masks[i] > 0.0).cpu().numpy().astype(bool).squeeze()
+                    # Logits
+                    logit = out_mask_logits[i].cpu().numpy()
+                    # Score
+                    score = out_scores[i].item() if isinstance(out_scores[i], torch.Tensor) else out_scores[i]
+                    
+                    # BBox (xywh relative)
+                    # mask_bool is (H, W) or (1, H, W)
+                    if mask_bool.ndim == 3: mask_bool = mask_bool[0]
+                    
+                    coords = np.argwhere(mask_bool)
+                    if coords.size > 0:
+                        y_min, x_min = coords.min(axis=0)
+                        y_max, x_max = coords.max(axis=0)
+                        x_rel = x_min / video_width
+                        y_rel = y_min / video_height
+                        w_rel = (x_max - x_min) / video_width
+                        h_rel = (y_max - y_min) / video_height
+                        box = [x_rel, y_rel, w_rel, h_rel]
+                    else:
+                        box = [0.0, 0.0, 0.0, 0.0]
+
+                    current_frame_data["out_obj_ids"].append(out_id)
+                    current_frame_data["out_binary_masks"].append(mask_bool)
+                    current_frame_data["out_probs"].append(score)
+                    current_frame_data["out_boxes_xywh"].append(box)
+                    current_frame_data["prompt_source"].append(cat_name)
+                    current_frame_data["low_res_logits"].append(logit)
+            
+            if found:
+                results_dict[frame_idx] = current_frame_data
+
         # Forward
-        for frame_idx, obj_ids, _, video_res_masks, _ in predictor.propagate_in_video(
+        for response in predictor.propagate_in_video(
             inference_state, 
             start_frame_idx=min_idx, 
             max_frame_num_to_track=MAX_TRACK,
             reverse=False,
             propagate_preflight=True
         ):
-            # frame_idx, obj_ids, _            , video_res_masks, _          = response
-            # frame_idx, obj_ids, low_res_masks, video_res_masks, obj_scores = response
-
-            # frame_idx (int): индекс текущего кадра в видео
-            # obj_ids (list): отслеживаемые ID объектов на кадре
-            # low_res_masks (torch.Tensor): маски объектов в низком разрешении (N, 1, H_low, W_low),  H_low, W_low = 288, 288 получились в нашем слчае
-            # video_res_masks (torch.Tensor): маски объектов в оригинальном разрешении видео (N, 1, H_video, W_video) H_video, W_video = 720, 1280
-            # obj_scores (torch.Tensor): уверенность модели для каждого объекта
-            
-            for i, out_obj_id in enumerate(obj_ids):
-                if out_obj_id == obj_id:
-                    mask_bool = (video_res_masks[i] > 0.0).cpu().numpy().astype(bool)
-                    obj_results[frame_idx] = mask_bool
+            process_response(response, obj_results)
 
         # Backward
-        for frame_idx, obj_ids, _, video_res_masks, _ in predictor.propagate_in_video(
+        for response in predictor.propagate_in_video(
             inference_state, 
             start_frame_idx=max_idx, 
             max_frame_num_to_track=MAX_TRACK,
             reverse=True,
             propagate_preflight=True
         ):
-            for i, out_obj_id in enumerate(obj_ids):
-                if out_obj_id == obj_id:
-                    mask_bool = (video_res_masks[i] > 0.0).cpu().numpy().astype(bool)
-                    obj_results[frame_idx] = mask_bool
+            process_response(response, obj_results)
 
         # Save Object Cache
-        # Мы сохраняем dict {frame_idx: mask} в NPZ
-        # Чтобы ключи были строками (требование savez), конвертируем frame_idx в str
-        save_dict = {str(k): v for k, v in obj_results.items()}
-        np.savez_compressed(cache_path, **save_dict)
+        # Format: outputs -> { frame_idx: { fields... } }
+        np.savez_compressed(cache_path, outputs=obj_results)
         
-        # Сразу сохраняем PNG маски (опционально, можно вынести в конец)
-        # Это увеличивает I/O, но позволяет видеть прогресс
-        for f_idx, mask in obj_results.items():
+        for f_idx, frame_data in obj_results.items():
+            # frame_data is the dict
+            if not frame_data["out_binary_masks"]: continue
+            
+            mask = frame_data["out_binary_masks"][0] # Take first (and only) object
+            
             frame_name = os.path.splitext(frame_files[f_idx])[0]
             f_dir = os.path.join(masks_dir, frame_name)
             os.makedirs(f_dir, exist_ok=True)
-            cv2.imwrite(os.path.join(f_dir, f"obj_{obj_id}.png"), (mask.squeeze()*255).astype(np.uint8))
+            cv2.imwrite(os.path.join(f_dir, f"obj_{obj_id}.png"), (mask.astype(np.uint8)*255))
 
     # --- 3. MERGE & VISUALIZE ---
     logger.info("--- MERGING AND VISUALIZING ---")
@@ -393,19 +444,9 @@ def main():
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     video_writer = cv2.VideoWriter(temp_video_path, fourcc, 24, (video_width, video_height))
     
-    COLORS = generate_bright_colors(max(100, len(obj_prompts) + 100)) # запас цветов
+    COLORS = generate_bright_colors(max(100, len(obj_prompts) + 100))
 
-    # Собираем все обработанные объекты из кэша
     cached_files = glob.glob(os.path.join(cache_dir, "*.npz"))
-    
-    # Чтобы рендерить кадр за кадром, нам нужно инвертировать структуру:
-    # Cache: Obj -> Frame -> Mask
-    # Need: Frame -> List[(Obj, Mask)]
-    
-    # Это может занять много памяти, если грузить всё сразу.
-    # Оптимизация: читаем NPZ лениво? Нет, npz читается сразу.
-    # Если видео длинное, лучше проходить по кадрам и дергать данные из NPZ (медленно).
-    # Или загрузить всё в RAM (может быть много, но это bool маски, они легкие).
     
     logger.info("Loading cache into memory for visualization...")
     frame_to_objects = defaultdict(list)
@@ -413,10 +454,23 @@ def main():
     for cf in tqdm(cached_files, desc="Loading cache"):
         # obj_101.npz
         oid = int(os.path.basename(cf).split('_')[1].split('.')[0])
-        data = np.load(cf)
-        for frame_key, mask in data.items():
-            frame_idx = int(frame_key)
-            frame_to_objects[frame_idx].append((oid, mask))
+        try:
+            data = np.load(cf, allow_pickle=True)
+            if 'outputs' in data:
+                # format to sam3_batch_run.py
+                outputs = data['outputs'].item()
+                for frame_idx, frame_data in outputs.items():
+                    if frame_data.get("out_binary_masks"):
+                        mask = frame_data["out_binary_masks"][0]
+                        frame_to_objects[frame_idx].append((oid, mask))
+            else:
+                # fallback to old format (if mixed)
+                for frame_key, mask in data.items():
+                    frame_idx = int(frame_key)
+                    frame_to_objects[frame_idx].append((oid, mask))
+        except Exception as e:
+            logger.error(f"Failed to load {cf}: {e}")
+            continue
             
     # Рендеринг
     sorted_frames = sorted(frame_to_objects.keys())
