@@ -258,63 +258,179 @@ class SAM3BatchProcessor:
             raise
 
     def merge_results(self, all_outputs):
-        """Merge outputs from multiple prompts into a single per-frame structure with consistent IDs"""
+        """Merge outputs from multiple prompts into a single per-frame structure with consistent IDs,
+           including global duplicate ID merging based on IoU."""
         merged_frames = {}
         
         # Get all frame indices
         all_frames = set()
         for out in all_outputs.values():
             all_frames.update(out.keys())
-            
-        logger.info("Merging results...")
+        all_frames_sorted = sorted(list(all_frames))
+
+        logger.info("Merging results and analyzing duplicates...")
         
-        # Global registry to keep IDs consistent across frames
-        # Key: (prompt_text, original_obj_id), Value: global_unique_id
-        id_registry = {}
+        # 1. Global registry initialization
+        id_registry = {} # (prompt, original_id) -> global_id
         next_global_id = 0
         
-        for frame_idx in sorted(list(all_frames)):
+        # 2. First Pass: Collect all object occurrences and detect overlaps
+        # We store masks to compute IoU
+        # overlap_counts: (id1, id2) -> count of frames where they overlap significantly
+        overlap_counts = {}
+        
+        # Helper to get global ID
+        def get_global_id(prompt, orig_id):
+            nonlocal next_global_id
+            key = (prompt, orig_id)
+            if key not in id_registry:
+                id_registry[key] = next_global_id
+                next_global_id += 1
+            return id_registry[key]
+
+        # Analyze frames for overlaps
+        for frame_idx in tqdm(all_frames_sorted, desc="Analyzing overlaps"):
+            frame_objects = [] # list of (global_id, mask)
+            
+            for prompt, prompt_output in all_outputs.items():
+                if frame_idx not in prompt_output: continue
+                p_out = prompt_output[frame_idx]
+                if len(p_out["out_obj_ids"]) == 0: continue
+                
+                ids = p_out["out_obj_ids"]
+                masks = p_out["out_binary_masks"]
+                
+                for i in range(len(ids)):
+                    gid = get_global_id(prompt, ids[i])
+                    mask = masks[i]
+                    frame_objects.append((gid, mask))
+            
+            # Check pairwise overlaps
+            for i in range(len(frame_objects)):
+                id1, mask1 = frame_objects[i]
+                for j in range(i + 1, len(frame_objects)):
+                    id2, mask2 = frame_objects[j]
+                    
+                    if id1 == id2: continue
+                    
+                    # Quick bounding box check or area check could speed this up
+                    intersection = np.logical_and(mask1, mask2).sum()
+                    if intersection == 0: continue
+                    
+                    area1 = mask1.sum()
+                    area2 = mask2.sum()
+                    union = np.logical_or(mask1, mask2).sum()
+                    iou = intersection / union
+                    
+                    # Check area ratio to prevent merging small objects into large ones (e.g. cup on table)
+                    # Duplicates should have similar areas
+                    if max(area1, area2) > 0:
+                        area_ratio = min(area1, area2) / max(area1, area2)
+                    else:
+                        area_ratio = 0
+                    
+                    if iou > 0.5 and area_ratio > 0.6: # Threshold for considering them duplicates
+                        pair = tuple(sorted((id1, id2)))
+                        overlap_counts[pair] = overlap_counts.get(pair, 0) + 1
+
+        # 3. Create ID remapping map based on overlap counts
+        # If two IDs overlap in more than N frames, merge them
+        merge_threshold_frames = 3
+        uf_parent = {i: i for i in range(next_global_id)}
+        
+        def find(i):
+            if uf_parent[i] != i:
+                uf_parent[i] = find(uf_parent[i])
+            return uf_parent[i]
+            
+        def union(i, j):
+            root_i = find(i)
+            root_j = find(j)
+            if root_i != root_j:
+                # Merge into smaller ID for consistency
+                if root_i < root_j:
+                    uf_parent[root_j] = root_i
+                else:
+                    uf_parent[root_i] = root_j
+
+        for (id1, id2), count in overlap_counts.items():
+            if count >= merge_threshold_frames:
+                logger.info(f"Merging ID {id1} and {id2} (overlap count: {count})")
+                union(id1, id2)
+                
+        # 4. Second Pass: Build merged frames with remapped IDs
+        for frame_idx in all_frames_sorted:
+            # Temporary storage for this frame: remapped_id -> list of masks/probs/boxes
+            frame_data = {} 
+            
+            for prompt, prompt_output in all_outputs.items():
+                if frame_idx not in prompt_output: continue
+                p_out = prompt_output[frame_idx]
+                if len(p_out["out_obj_ids"]) == 0: continue
+                
+                ids = p_out["out_obj_ids"]
+                masks = p_out["out_binary_masks"]
+                probs = p_out["out_probs"]
+                boxes = p_out["out_boxes_xywh"]
+                
+                for i in range(len(ids)):
+                    # Get original global ID then remap it
+                    orig_gid = get_global_id(prompt, ids[i])
+                    final_id = find(orig_gid)
+                    
+                    if final_id not in frame_data:
+                        frame_data[final_id] = {
+                            "masks": [],
+                            "probs": [],
+                            "boxes": [],
+                            "prompts": []
+                        }
+                    
+                    frame_data[final_id]["masks"].append(masks[i])
+                    frame_data[final_id]["probs"].append(probs[i])
+                    frame_data[final_id]["boxes"].append(boxes[i])
+                    frame_data[final_id]["prompts"].append(prompt)
+
+            # Construct final arrays for the frame
             frame_merged = {
                 "out_obj_ids": [],
                 "out_probs": [],
                 "out_boxes_xywh": [],
                 "out_binary_masks": [],
-                "prompt_source": [] # To track which prompt generated this object
+                "prompt_source": []
             }
             
-            for prompt, prompt_output in all_outputs.items():
-                if frame_idx in prompt_output:
-                    p_out = prompt_output[frame_idx]
-                    
-                    # Skip if empty
-                    if len(p_out["out_obj_ids"]) == 0:
-                        continue
-                        
-                    ids = p_out["out_obj_ids"]
-                    masks = p_out["out_binary_masks"]
-                    probs = p_out["out_probs"]
-                    boxes = p_out["out_boxes_xywh"]
-                    
-                    for i in range(len(ids)):
-                        original_id = ids[i]
-                        
-                        # Generate or retrieve unique persistent ID
-                        # We assume SAM tracks ID consistently within a single prompt session
-                        obj_key = (prompt, original_id)
-                        
-                        if obj_key not in id_registry:
-                            id_registry[obj_key] = next_global_id
-                            next_global_id += 1
-                        
-                        persistent_id = id_registry[obj_key]
-                        
-                        frame_merged["out_obj_ids"].append(persistent_id)
-                        frame_merged["out_binary_masks"].append(masks[i])
-                        frame_merged["out_probs"].append(probs[i])
-                        frame_merged["out_boxes_xywh"].append(boxes[i])
-                        frame_merged["prompt_source"].append(prompt)
+            for final_id, data in frame_data.items():
+                # Merge masks (logical OR)
+                merged_mask = data["masks"][0]
+                for m in data["masks"][1:]:
+                    merged_mask = np.logical_or(merged_mask, m)
+                
+                # Merge probability (take max)
+                merged_prob = max(data["probs"])
+                
+                # Merge box (recompute from merged mask)
+                # Or just take the union of boxes roughly
+                # Let's recompute from mask to be precise
+                # Standard SAM box format is xywh normalized? No, it seems to be xywh normalized in output
+                # But here we have masks. Let's just use the box of the highest prob or union.
+                # Simple union of boxes:
+                # x1 = min(x), y1 = min(y), x2 = max(x+w), y2 = max(y+h)
+                # But boxes are normalized.
+                
+                b_x1 = min([b[0] for b in data["boxes"]])
+                b_y1 = min([b[1] for b in data["boxes"]])
+                b_x2 = max([b[0] + b[2] for b in data["boxes"]])
+                b_y2 = max([b[1] + b[3] for b in data["boxes"]])
+                merged_box = np.array([b_x1, b_y1, b_x2 - b_x1, b_y2 - b_y1])
 
-            # Convert lists to numpy arrays
+                frame_merged["out_obj_ids"].append(final_id)
+                frame_merged["out_binary_masks"].append(merged_mask)
+                frame_merged["out_probs"].append(merged_prob)
+                frame_merged["out_boxes_xywh"].append(merged_box)
+                frame_merged["prompt_source"].append(data["prompts"][0]) # Just take the first prompt source
+            
+            # Convert to numpy
             if frame_merged["out_obj_ids"]:
                 frame_merged["out_obj_ids"] = np.array(frame_merged["out_obj_ids"])
                 frame_merged["out_probs"] = np.array(frame_merged["out_probs"])
@@ -323,9 +439,9 @@ class SAM3BatchProcessor:
             else:
                 frame_merged["out_obj_ids"] = np.array([])
                 frame_merged["out_probs"] = np.array([])
+                frame_merged["out_binary_masks"] = np.zeros((0, 0, 0))
                 frame_merged["out_boxes_xywh"] = np.array([])
-                frame_merged["out_binary_masks"] = np.zeros((0, 0, 0)) # Empty
-                
+
             merged_frames[frame_idx] = frame_merged
             
         return merged_frames
@@ -531,4 +647,3 @@ class SAM3BatchProcessor:
 #     # processor.visualize_merged(merged, output_video_name="merged_full.mp4", show_box=True, show_label=True)
     
 #     logger.info("Done!")
-

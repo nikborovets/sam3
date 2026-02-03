@@ -502,7 +502,12 @@ class Sam3VideoInference(Sam3VideoBase):
             out_boxes_xywh[..., 3] /= H_video
 
         # apply non-overlapping constraints on the existing masklets
-        if out_binary_masks.shape[0] > 1:
+        # Check if non-overlapping constraints should be applied
+        apply_non_overlap = True
+        if hasattr(self, "tracker") and hasattr(self.tracker, "non_overlap_masks_for_output"):
+            apply_non_overlap = self.tracker.non_overlap_masks_for_output
+            
+        if apply_non_overlap and out_binary_masks.shape[0] > 1:
             assert len(out_binary_masks) == len(out_tracker_probs)
             out_binary_masks = (
                 self.tracker._apply_object_wise_non_overlapping_constraints(

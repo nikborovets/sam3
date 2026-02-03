@@ -16,7 +16,8 @@ def fill_config(
     show_label: bool,
     show_mask: bool,
     show_original_image: bool,
-    save_frames: bool
+    save_frames: bool,
+    both_videos: bool = False
 ) -> dict:
     processor = SAM3BatchProcessor(video_path, output_dir)
 
@@ -35,15 +36,17 @@ def fill_config(
         show_original_image=show_original_image,
         save_frames=save_frames
     )
-    # processor.visualize_merged(
-    #     merged, 
-    #     output_video_name="merged_2-half-blind-no-light-day_3023_with_image.mp4",
-    #     show_box=show_box,
-    #     show_label=show_label,
-    #     show_mask=show_mask,
-    #     show_original_image=not show_original_image,
-    #     save_frames=not save_frames
-    # )
+    if both_videos:
+        processor.visualize_merged(
+            merged, 
+            # output_video_name="merged_2-half-blind-no-light-day_3023_with_image.mp4",
+            output_video_name="merged_2-half-blind-no-light-day_3023_no_image_without_overlap_artefacts.mp4",
+            show_box=show_box,
+            show_label=show_label,
+            show_mask=show_mask,
+            show_original_image=not show_original_image,
+            save_frames=not save_frames
+        )
 
     return merged
 
@@ -593,6 +596,26 @@ def run_3023_16_01_2026_config():
     print("Done!")
     return merged
 
+def test_run_without_overlap_artefacts():
+    prompts = [
+        "table",
+    ]
+    merged = fill_config(
+        # video_path="/workspace/edited_color_and_edge_sharpness_every_3_frame_new",
+        video_path="/workspace/2-half-blind-no-light-day_e3f",
+        output_dir="/workspace/sam3_batch_results_3023_16_01_2026_without_overlap_artefacts",
+        output_video_name="merged_2-half-blind-no-light-day_3023_with_image_without_overlap_artefacts.mp4",
+        prompts=prompts,
+        show_box=True,
+        show_label=True,
+        show_mask=True,
+        show_original_image=True,
+        save_frames=False,
+        both_videos=True
+        )
+    print("Done!")
+    return merged
+
 
 if __name__ == "__main__":
     try:
@@ -602,7 +625,8 @@ if __name__ == "__main__":
         # run_big_config()
         # run_music_room_config()
         # run_config_seq1_2711()
-        run_3023_16_01_2026_config()
+        # run_3023_16_01_2026_config()
+        test_run_without_overlap_artefacts()
         send_message("Batch run completed successfully")
     except Exception as e:
         notify_error(e, "Критическая ошибка при выполнении batch_run_configs.py")

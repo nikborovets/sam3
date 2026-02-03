@@ -151,3 +151,7 @@ Thumbs.db
 # BPE vocabulary files
 *.bpe
 *.vocab
+
+coco_*.json
+coco_join_objects.yml
+to_sort/
