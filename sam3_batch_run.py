@@ -60,6 +60,7 @@ class SAM3BatchProcessor:
     def initialize_predictor(self):
         if self.predictor is None:
             logger.info("Initializing SAM3 predictor...")
+            # self.predictor = build_sam3_video_predictor(gpus_to_use=[0,1])
             self.predictor = build_sam3_video_predictor()
             logger.info("SAM3 predictor initialized")
 
@@ -179,7 +180,11 @@ class SAM3BatchProcessor:
                         
                         # Load frames for this chunk
                         chunk_paths = self.video_frames[start_idx:end_idx]
-                        chunk_images = [Image.open(p) for p in chunk_paths]
+                        chunk_images = []
+                        for p in chunk_paths:
+                            img = Image.open(p)
+                            img.load()
+                            chunk_images.append(img)
                         
                         # Reset session to clear previous state
                         self.reset_session()
@@ -257,7 +262,7 @@ class SAM3BatchProcessor:
                 notify_error(e, f"Ошибка в SAM3BatchProcessor.process_prompt для промпта: {prompt_text}")
             raise
 
-    def merge_results(self, all_outputs):
+    def merge_results(self, all_outputs, smart_merge=True):
         """Merge outputs from multiple prompts into a single per-frame structure with consistent IDs,
            including global duplicate ID merging based on IoU."""
         merged_frames = {}
@@ -268,16 +273,9 @@ class SAM3BatchProcessor:
             all_frames.update(out.keys())
         all_frames_sorted = sorted(list(all_frames))
 
-        logger.info("Merging results and analyzing duplicates...")
-        
         # 1. Global registry initialization
         id_registry = {} # (prompt, original_id) -> global_id
         next_global_id = 0
-        
-        # 2. First Pass: Collect all object occurrences and detect overlaps
-        # We store masks to compute IoU
-        # overlap_counts: (id1, id2) -> count of frames where they overlap significantly
-        overlap_counts = {}
         
         # Helper to get global ID
         def get_global_id(prompt, orig_id):
@@ -288,78 +286,94 @@ class SAM3BatchProcessor:
                 next_global_id += 1
             return id_registry[key]
 
-        # Analyze frames for overlaps
-        for frame_idx in tqdm(all_frames_sorted, desc="Analyzing overlaps"):
-            frame_objects = [] # list of (global_id, mask)
+        if smart_merge:
+            logger.info("Merging results and analyzing duplicates (Smart Merge ENABLED)...")
             
-            for prompt, prompt_output in all_outputs.items():
-                if frame_idx not in prompt_output: continue
-                p_out = prompt_output[frame_idx]
-                if len(p_out["out_obj_ids"]) == 0: continue
-                
-                ids = p_out["out_obj_ids"]
-                masks = p_out["out_binary_masks"]
-                
-                for i in range(len(ids)):
-                    gid = get_global_id(prompt, ids[i])
-                    mask = masks[i]
-                    frame_objects.append((gid, mask))
+            # 2. First Pass: Collect all object occurrences and detect overlaps
+            # We store masks to compute IoU
+            # overlap_counts: (id1, id2) -> count of frames where they overlap significantly
+            overlap_counts = {}
             
-            # Check pairwise overlaps
-            for i in range(len(frame_objects)):
-                id1, mask1 = frame_objects[i]
-                for j in range(i + 1, len(frame_objects)):
-                    id2, mask2 = frame_objects[j]
+            # Analyze frames for overlaps
+            for frame_idx in tqdm(all_frames_sorted, desc="Analyzing overlaps"):
+                frame_objects = [] # list of (global_id, mask)
+                
+                for prompt, prompt_output in all_outputs.items():
+                    if frame_idx not in prompt_output: continue
+                    p_out = prompt_output[frame_idx]
+                    if len(p_out["out_obj_ids"]) == 0: continue
                     
-                    if id1 == id2: continue
+                    ids = p_out["out_obj_ids"]
+                    masks = p_out["out_binary_masks"]
                     
-                    # Quick bounding box check or area check could speed this up
-                    intersection = np.logical_and(mask1, mask2).sum()
-                    if intersection == 0: continue
-                    
-                    area1 = mask1.sum()
-                    area2 = mask2.sum()
-                    union = np.logical_or(mask1, mask2).sum()
-                    iou = intersection / union
-                    
-                    # Check area ratio to prevent merging small objects into large ones (e.g. cup on table)
-                    # Duplicates should have similar areas
-                    if max(area1, area2) > 0:
-                        area_ratio = min(area1, area2) / max(area1, area2)
+                    for i in range(len(ids)):
+                        gid = get_global_id(prompt, ids[i])
+                        mask = masks[i]
+                        frame_objects.append((gid, mask))
+                
+                # Check pairwise overlaps
+                for i in range(len(frame_objects)):
+                    id1, mask1 = frame_objects[i]
+                    for j in range(i + 1, len(frame_objects)):
+                        id2, mask2 = frame_objects[j]
+                        
+                        if id1 == id2: continue
+                        
+                        # Quick bounding box check or area check could speed this up
+                        intersection = np.logical_and(mask1, mask2).sum()
+                        if intersection == 0: continue
+                        
+                        area1 = mask1.sum()
+                        area2 = mask2.sum()
+                        union = np.logical_or(mask1, mask2).sum()
+                        iou = intersection / union
+                        
+                        # Check area ratio to prevent merging small objects into large ones (e.g. cup on table)
+                        # Duplicates should have similar areas
+                        if max(area1, area2) > 0:
+                            area_ratio = min(area1, area2) / max(area1, area2)
+                        else:
+                            area_ratio = 0
+                        
+                        if iou > 0.5 and area_ratio > 0.6: # Threshold for considering them duplicates
+                            pair = tuple(sorted((id1, id2)))
+                            overlap_counts[pair] = overlap_counts.get(pair, 0) + 1
+
+            # 3. Create ID remapping map based on overlap counts
+            # If two IDs overlap in more than N frames, merge them
+            merge_threshold_frames = 3
+            uf_parent = {}
+            
+            def find(i):
+                if i not in uf_parent: uf_parent[i] = i
+                if uf_parent[i] != i:
+                    uf_parent[i] = find(uf_parent[i])
+                return uf_parent[i]
+                
+            def union(i, j):
+                root_i = find(i)
+                root_j = find(j)
+                if root_i != root_j:
+                    # Merge into smaller ID for consistency
+                    if root_i < root_j:
+                        uf_parent[root_j] = root_i
                     else:
-                        area_ratio = 0
-                    
-                    if iou > 0.5 and area_ratio > 0.6: # Threshold for considering them duplicates
-                        pair = tuple(sorted((id1, id2)))
-                        overlap_counts[pair] = overlap_counts.get(pair, 0) + 1
+                        uf_parent[root_i] = root_j
 
-        # 3. Create ID remapping map based on overlap counts
-        # If two IDs overlap in more than N frames, merge them
-        merge_threshold_frames = 3
-        uf_parent = {i: i for i in range(next_global_id)}
-        
-        def find(i):
-            if uf_parent[i] != i:
-                uf_parent[i] = find(uf_parent[i])
-            return uf_parent[i]
+            for (id1, id2), count in overlap_counts.items():
+                if count >= merge_threshold_frames:
+                    logger.info(f"Merging ID {id1} and {id2} (overlap count: {count})")
+                    union(id1, id2)
             
-        def union(i, j):
-            root_i = find(i)
-            root_j = find(j)
-            if root_i != root_j:
-                # Merge into smaller ID for consistency
-                if root_i < root_j:
-                    uf_parent[root_j] = root_i
-                else:
-                    uf_parent[root_i] = root_j
+            def get_final_id(gid):
+                return find(gid)
+        else:
+            logger.info("Merging results (Smart Merge DISABLED)...")
+            def get_final_id(gid):
+                return gid
 
-        for (id1, id2), count in overlap_counts.items():
-            if count >= merge_threshold_frames:
-                logger.info(f"Merging ID {id1} and {id2} (overlap count: {count})")
-                union(id1, id2)
-                
-        # 4. Second Pass: Build merged frames with remapped IDs
-        for frame_idx in all_frames_sorted:
+        # 4. Final Pass: Build merged frames
+        for frame_idx in tqdm(all_frames_sorted, desc="Building merged frames"):
             # Temporary storage for this frame: remapped_id -> list of masks/probs/boxes
             frame_data = {} 
             
@@ -376,7 +390,7 @@ class SAM3BatchProcessor:
                 for i in range(len(ids)):
                     # Get original global ID then remap it
                     orig_gid = get_global_id(prompt, ids[i])
-                    final_id = find(orig_gid)
+                    final_id = get_final_id(orig_gid)
                     
                     if final_id not in frame_data:
                         frame_data[final_id] = {
@@ -582,14 +596,14 @@ class SAM3BatchProcessor:
         os.remove(temp_path)
         logger.info(f"Video saved to {video_out_path}")
 
-    def run(self, prompts):
+    def run(self, prompts, smart_merge=True):
         self.start_session()
         
         all_outputs = {}
         for prompt in prompts:
             all_outputs[prompt] = self.process_prompt(prompt)
             
-        merged = self.merge_results(all_outputs)
+        merged = self.merge_results(all_outputs, smart_merge=smart_merge)
         self.visualize_merged(merged)
         
         logger.info("Done!")
