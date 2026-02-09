@@ -1,3 +1,4 @@
+import time
 import torch
 import matplotlib.pyplot as plt
 import numpy as np
@@ -5,17 +6,37 @@ import cv2
 import argparse
 from pathlib import Path
 from tqdm import tqdm
+import gc
 from sam3.model_builder import build_sam3_video_model
+
+import os
+import sys
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+try:
+    from tg_notifier import notify_error, send_message
+except ImportError:
+    def notify_error(e, msg=""): print(f"Notifier not found: {msg} {e}")
+
+# DEFAULT VALUES
+# /workspace/segm_mask_ivan_09-02-2026
+DEFAULT_WEIGHTS = "/workspace/data_mount/model_weights/sam3/sam3.pt"
+DEFAULT_INPUTS = "/workspace/seq2img"
+DEFAULT_MASKS = "/workspace/segm_mask_ivan_09-02-2026/SegmentationClass"
+DEFAULT_LABELMAP = "/workspace/segm_mask_ivan_09-02-2026/labelmap.txt"
+DEFAULT_OUT_OVERLAY = "/workspace/sam3_ivan_seq2_results/overlay"
+DEFAULT_OUT_MASKS = "/workspace/sam3_ivan_seq2_results/masks"
+DEFAULT_DEVICE = "cuda"
+# ---------------------
 
 def parse_args():
     parser = argparse.ArgumentParser(description="SAM3 Video Propagation CLI")
-    parser.add_argument("--weights", type=str, help="Path to model weights")
-    parser.add_argument("--inputs", type=str, help="Path to RGB images")
-    parser.add_argument("--masks", type=str, help="Path to input masks")
-    parser.add_argument("--labelmap", type=str, help="Path to labelmap.txt")
-    parser.add_argument("--out-overlay", type=str, help="Output folder for overlays")
-    parser.add_argument("--out-masks", type=str, help="Output folder for binary masks")
-    parser.add_argument("--device", type=str, default="cuda", help="Device to use (cuda/cpu)")
+    parser.add_argument("--weights", type=str, default=DEFAULT_WEIGHTS, help="Path to model weights")
+    parser.add_argument("--inputs", type=str, default=DEFAULT_INPUTS, help="Path to RGB images")
+    parser.add_argument("--masks", type=str, default=DEFAULT_MASKS, help="Path to input masks")
+    parser.add_argument("--labelmap", type=str, default=DEFAULT_LABELMAP, help="Path to labelmap.txt")
+    parser.add_argument("--out-overlay", type=str, default=DEFAULT_OUT_OVERLAY, help="Output folder for overlays")
+    parser.add_argument("--out-masks", type=str, default=DEFAULT_OUT_MASKS, help="Output folder for binary masks")
+    parser.add_argument("--device", type=str, default=DEFAULT_DEVICE, help="Device to use (cuda/cpu)")
     return parser.parse_args()
 
 def load_objects_from_labelmap(path):
@@ -43,15 +64,15 @@ def main():
     sam3_model = build_sam3_video_model(
         checkpoint_path=args.weights, 
         load_from_HF=False, 
-        bpe_path='/sam3/sam3/assets/bpe_simple_vocab_16e6.txt.gz'
+        bpe_path='/workspace/sam3/sam3/assets/bpe_simple_vocab_16e6.txt.gz'
     )
     predictor = sam3_model.tracker
     predictor.backbone = sam3_model.detector.backbone
     predictor.non_overlap_masks_for_output = True
 
     input_path = Path(args.inputs)
-    frame_names = sorted(list(input_path.glob("*")))
-    input_masks = sorted(list(Path(args.masks).glob("*")))
+    frame_names = sorted([p for p in input_path.glob("*") if p.suffix.lower() in [".jpg", ".jpeg", ".png", ".bmp"]])
+    input_masks = sorted([p for p in Path(args.masks).glob("*") if p.suffix.lower() in [".jpg", ".jpeg", ".png", ".bmp"]])
     
     Path(args.out_overlay).mkdir(parents=True, exist_ok=True)
     Path(args.out_masks).mkdir(parents=True, exist_ok=True)
@@ -85,9 +106,19 @@ def main():
             for i, out_obj_id in enumerate(out_obj_ids)
         }
 
+    del inference_state
+    del sam3_model
+    del predictor
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+    gc.collect()
+
     print("Saving results...")
     for out_frame_idx in tqdm(video_segments.keys()):
         frame = cv2.imread(str(frame_names[out_frame_idx]))
+        if frame is None:
+            print(f"Warning: Could not read frame {frame_names[out_frame_idx]}, skipping.")
+            continue
         res_mask_rgb = np.zeros_like(frame)
         overlay = frame.copy()
 
@@ -107,4 +138,15 @@ def main():
         cv2.imwrite(f"{args.out_masks}/{fname}.png", cv2.cvtColor(res_mask_rgb, cv2.COLOR_RGB2BGR))
 
 if __name__ == "__main__":
-    main()
+    try:
+        time_start = time.time()
+        send_message(f"Starting {os.path.basename(__file__)}...")
+        main()
+    except Exception as e:
+        time_end = time.time()
+        time_elapsed = time.strftime("%H:%M:%S", time.gmtime(time_end - time_start))
+        notify_error(e, f"Критическая ошибка при выполнении {os.path.basename(__file__)}. Time elapsed: {time_elapsed}")
+        raise
+    time_end = time.time()
+    time_elapsed = time.strftime("%H:%M:%S", time.gmtime(time_end - time_start))
+    send_message(f"{os.path.basename(__file__)} completed successfully in {time_elapsed}")
