@@ -60,7 +60,6 @@ class SAM3BatchProcessor:
     def initialize_predictor(self):
         if self.predictor is None:
             logger.info("Initializing SAM3 predictor...")
-            # self.predictor = build_sam3_video_predictor(gpus_to_use=[0,1])
             self.predictor = build_sam3_video_predictor()
             logger.info("SAM3 predictor initialized")
 
@@ -134,7 +133,8 @@ class SAM3BatchProcessor:
         Splits the total list of video frames into segments of equal length
         (e.g., 600 frames) to avoid OOM.
         """
-        slice_size = 605 # frames
+        # slice_size = 605 # frames
+        slice_size = 1200 # frames
         total_frames = len(self.video_frames)
         chunks = []
         current_idx = 0
@@ -180,11 +180,13 @@ class SAM3BatchProcessor:
                         
                         # Load frames for this chunk
                         chunk_paths = self.video_frames[start_idx:end_idx]
-                        chunk_images = []
-                        for p in chunk_paths:
-                            img = Image.open(p)
-                            img.load()
-                            chunk_images.append(img)
+                        chunk_images = [Image.open(p) for p in chunk_paths]
+                        # if multigpu, then we need to load it immediately
+                        # chunk_images = []
+                        # for p in chunk_paths:
+                        #     img = Image.open(p)
+                        #     img.load()
+                        #     chunk_images.append(img)
                         
                         # Reset session to clear previous state
                         self.reset_session()
@@ -264,7 +266,7 @@ class SAM3BatchProcessor:
 
     def merge_results(self, all_outputs, smart_merge=True):
         """Merge outputs from multiple prompts into a single per-frame structure with consistent IDs,
-           including global duplicate ID merging based on IoU."""
+           including global duplicate ID merging based on IoU and head-to-head confidence."""
         merged_frames = {}
         
         # Get all frame indices
@@ -289,14 +291,13 @@ class SAM3BatchProcessor:
         if smart_merge:
             logger.info("Merging results and analyzing duplicates (Smart Merge ENABLED)...")
             
-            # 2. First Pass: Collect all object occurrences and detect overlaps
-            # We store masks to compute IoU
-            # overlap_counts: (id1, id2) -> count of frames where they overlap significantly
-            overlap_counts = {}
+            # 2. First Pass: Detect overlaps and "duels" of confidence
+            # overlap_pairs_info: (id1, id2) -> {"sum1": float, "sum2": float, "count": int}
+            overlap_pairs_info = {}
             
             # Analyze frames for overlaps
             for frame_idx in tqdm(all_frames_sorted, desc="Analyzing overlaps"):
-                frame_objects = [] # list of (global_id, mask)
+                frame_objects = [] # list of (global_id, mask, prob)
                 
                 for prompt, prompt_output in all_outputs.items():
                     if frame_idx not in prompt_output: continue
@@ -305,42 +306,53 @@ class SAM3BatchProcessor:
                     
                     ids = p_out["out_obj_ids"]
                     masks = p_out["out_binary_masks"]
+                    probs = p_out["out_probs"]
                     
                     for i in range(len(ids)):
                         gid = get_global_id(prompt, ids[i])
-                        mask = masks[i]
-                        frame_objects.append((gid, mask))
+                        frame_objects.append((gid, masks[i], probs[i]))
                 
                 # Check pairwise overlaps
                 for i in range(len(frame_objects)):
-                    id1, mask1 = frame_objects[i]
+                    id1, mask1, prob1 = frame_objects[i]
                     for j in range(i + 1, len(frame_objects)):
-                        id2, mask2 = frame_objects[j]
+                        id2, mask2, prob2 = frame_objects[j]
                         
                         if id1 == id2: continue
                         
-                        # Quick bounding box check or area check could speed this up
                         intersection = np.logical_and(mask1, mask2).sum()
                         if intersection == 0: continue
                         
                         area1 = mask1.sum()
                         area2 = mask2.sum()
-                        union = np.logical_or(mask1, mask2).sum()
-                        iou = intersection / union
+                        union_area = np.logical_or(mask1, mask2).sum()
+                        iou = intersection / union_area
                         
-                        # Check area ratio to prevent merging small objects into large ones (e.g. cup on table)
-                        # Duplicates should have similar areas
                         if max(area1, area2) > 0:
                             area_ratio = min(area1, area2) / max(area1, area2)
                         else:
                             area_ratio = 0
                         
-                        if iou > 0.5 and area_ratio > 0.6: # Threshold for considering them duplicates
+                        # Thresholds for duplicate detection
+                        IOU_THRESHOLD = 0.75
+                        AREA_RATIO_THRESHOLD = 0.75
+                        
+                        if iou > IOU_THRESHOLD and area_ratio > AREA_RATIO_THRESHOLD: 
                             pair = tuple(sorted((id1, id2)))
-                            overlap_counts[pair] = overlap_counts.get(pair, 0) + 1
+                            if pair not in overlap_pairs_info:
+                                overlap_pairs_info[pair] = {"sum1": 0.0, "sum2": 0.0, "count": 0, "id1": pair[0], "id2": pair[1]}
+                            
+                            # Update confidence duel info
+                            if id1 == pair[0]:
+                                overlap_pairs_info[pair]["sum1"] += prob1
+                                overlap_pairs_info[pair]["sum2"] += prob2
+                            else:
+                                overlap_pairs_info[pair]["sum1"] += prob2
+                                overlap_pairs_info[pair]["sum2"] += prob1
+                            
+                            overlap_pairs_info[pair]["count"] += 1
 
-            # 3. Create ID remapping map based on overlap counts
-            # If two IDs overlap in more than N frames, merge them
+            # 3. Create ID remapping map
             merge_threshold_frames = 3
             uf_parent = {}
             
@@ -350,20 +362,23 @@ class SAM3BatchProcessor:
                     uf_parent[i] = find(uf_parent[i])
                 return uf_parent[i]
                 
-            def union(i, j):
+            def union(i, j, info):
                 root_i = find(i)
                 root_j = find(j)
                 if root_i != root_j:
-                    # Merge into smaller ID for consistency
-                    if root_i < root_j:
-                        uf_parent[root_j] = root_i
+                    # Duel: who had higher average prob DURING overlap?
+                    avg1 = info["sum1"] / info["count"]
+                    avg2 = info["sum2"] / info["count"]
+                    
+                    if avg1 >= avg2:
+                        uf_parent[root_j] = root_i # J merges into I
                     else:
-                        uf_parent[root_i] = root_j
+                        uf_parent[root_i] = root_j # I merges into J
 
-            for (id1, id2), count in overlap_counts.items():
-                if count >= merge_threshold_frames:
-                    logger.info(f"Merging ID {id1} and {id2} (overlap count: {count})")
-                    union(id1, id2)
+            for pair, info in overlap_pairs_info.items():
+                if info["count"] >= merge_threshold_frames:
+                    logger.info(f"Merging ID {info['id1']} and {info['id2']} (overlap count: {info['count']})")
+                    union(info["id1"], info["id2"], info)
             
             def get_final_id(gid):
                 return find(gid)
@@ -374,7 +389,6 @@ class SAM3BatchProcessor:
 
         # 4. Final Pass: Build merged frames
         for frame_idx in tqdm(all_frames_sorted, desc="Building merged frames"):
-            # Temporary storage for this frame: remapped_id -> list of masks/probs/boxes
             frame_data = {} 
             
             for prompt, prompt_output in all_outputs.items():
@@ -388,7 +402,6 @@ class SAM3BatchProcessor:
                 boxes = p_out["out_boxes_xywh"]
                 
                 for i in range(len(ids)):
-                    # Get original global ID then remap it
                     orig_gid = get_global_id(prompt, ids[i])
                     final_id = get_final_id(orig_gid)
                     
@@ -405,7 +418,6 @@ class SAM3BatchProcessor:
                     frame_data[final_id]["boxes"].append(boxes[i])
                     frame_data[final_id]["prompts"].append(prompt)
 
-            # Construct final arrays for the frame
             frame_merged = {
                 "out_obj_ids": [],
                 "out_probs": [],
@@ -415,22 +427,11 @@ class SAM3BatchProcessor:
             }
             
             for final_id, data in frame_data.items():
-                # Merge masks (logical OR)
                 merged_mask = data["masks"][0]
                 for m in data["masks"][1:]:
                     merged_mask = np.logical_or(merged_mask, m)
                 
-                # Merge probability (take max)
                 merged_prob = max(data["probs"])
-                
-                # Merge box (recompute from merged mask)
-                # Or just take the union of boxes roughly
-                # Let's recompute from mask to be precise
-                # Standard SAM box format is xywh normalized? No, it seems to be xywh normalized in output
-                # But here we have masks. Let's just use the box of the highest prob or union.
-                # Simple union of boxes:
-                # x1 = min(x), y1 = min(y), x2 = max(x+w), y2 = max(y+h)
-                # But boxes are normalized.
                 
                 b_x1 = min([b[0] for b in data["boxes"]])
                 b_y1 = min([b[1] for b in data["boxes"]])
@@ -442,7 +443,7 @@ class SAM3BatchProcessor:
                 frame_merged["out_binary_masks"].append(merged_mask)
                 frame_merged["out_probs"].append(merged_prob)
                 frame_merged["out_boxes_xywh"].append(merged_box)
-                frame_merged["prompt_source"].append(data["prompts"][0]) # Just take the first prompt source
+                frame_merged["prompt_source"].append(data["prompts"][0])
             
             # Convert to numpy
             if frame_merged["out_obj_ids"]:
@@ -569,12 +570,12 @@ class SAM3BatchProcessor:
                             # x1, y1 already defined
                             pass
                             
-                        # prob = outputs["out_probs"][i]
+                        prob = outputs["out_probs"][i]
                         prompt = outputs["prompt_source"][i]
-                        label_text = f"id={obj_id}"
-                        # label_text = f"{obj_id}, {prompt}, {prob:.2f}"
+                        # label_text = f"id={obj_id}"
+                        label_text = f"{obj_id};{prompt};{prob:.2f}"
                         
-                        cv2.putText(overlay, label_text, (x1, max(y1 - 10, 0)),
+                        cv2.putText(overlay, label_text, (x1 + 5, min(y1 + 12, h - 12)),
                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color255, 1, cv2.LINE_AA)
 
             bgr_frame = cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR)
@@ -661,3 +662,4 @@ class SAM3BatchProcessor:
 #     # processor.visualize_merged(merged, output_video_name="merged_full.mp4", show_box=True, show_label=True)
     
 #     logger.info("Done!")
+

@@ -17,6 +17,7 @@ def fill_config(
     show_mask: bool,
     show_original_image: bool,
     save_frames: bool,
+    smart_merge: bool = True,
     both_videos: bool = False
 ) -> dict:
     processor = SAM3BatchProcessor(video_path, output_dir)
@@ -25,7 +26,7 @@ def fill_config(
     for prompt in prompts:
         all_outputs[prompt] = processor.process_prompt(prompt)
 
-    merged = processor.merge_results(all_outputs, smart_merge=True)
+    merged = processor.merge_results(all_outputs, smart_merge=smart_merge)
     
     processor.visualize_merged(
         merged, 
@@ -41,7 +42,8 @@ def fill_config(
             merged, 
             # output_video_name="merged_2-half-blind-no-light-day_3023_with_image.mp4",
             # output_video_name="merged_2-half-blind-no-light-day_3023_no_image_without_overlap_artefacts.mp4",
-            output_video_name="merged_2-half-blind-no-light-day_3023_no_image_without_overlap_artefacts_all_text.mp4",
+            # output_video_name="merged_2-half-blind-no-light-day_3023_no_im_test_artef.mp4",
+            output_video_name="merged_30_01_seq2_images_no_image_no_smart_merge.mp4",
             show_box=show_box,
             show_label=show_label,
             show_mask=show_mask,
@@ -618,6 +620,99 @@ def test_run_without_overlap_artefacts():
     return merged
 
 def run_3023_16_01_2026_config_without_overlap_artefacts():
+    # ALLOWED_PROMPTS = [
+    #         # --- Архитектура и фон (Room Structure) ---
+    #         "wall",
+    #         "ceiling",
+    #         "illumination",
+    #         "floor",
+    #         "baseboard",
+    #         "concrete",
+    #         "column",
+    #         "window",
+    #         "door",
+    #         "pipe",
+    #         # "radiator", # мусор, убрал ранее
+    #         "ventilation",
+
+    #         # --- Элементы на стенах (Fixtures) ---
+    #         "socket",
+    #         "switch",
+    #         "light switch",
+    #         "window blind",
+    #         "door handle",
+    #         "blackboard",
+    #         "black plate",
+    #         "paperboard", # мусор, в cvat увидел, TODO: объединить с box
+
+    #         # --- Крупная мебель (Large Furniture) ---
+    #         "cabinet",
+    #         # "wardrobe", # мусор, в cvat увидел (вообще нет его кажется)
+    #         # "cabinet wall", # мусор, в cvat увидел (вообще нет его кажется)
+    #         # "shelves", # необязательно
+    #         # "cabinet door", # мусор, в cvat увидел, TODO: объединить с cabinet
+    #         "glass",
+    #         # "inside of the cabinet", # мусор, в cvat увидел, TODO: объединить с cabinet
+    #         "sofa",
+    #         # "armrest", # необязательно
+    #         # "cushion", # необязательно
+    #         "chair",
+    #         "table",
+    #         "bin",
+
+    #         # --- Предметы в шкафу/на полках (Objects on shelves/background) ---
+    #         # "cardboard boxes", # мусор, в cvat увидел, TODO: объединить с box
+    #         "box",
+    #         # "router box", # мусор, в cvat увидел, TODO: объединить с box
+    #         # "package", # мусор, в cvat увидел, TODO: объединить с box
+    #         "frame",
+    #         "book",
+    #         "helmet",
+    #         # "vase", # добавлено через mask prompt
+    #         "mug",
+    #         # "black thing", # мусор, в cvat увидел (вообще нет его кажется)
+    #         # "statuette", # добавлено через mask prompt
+    #         "backpack",
+    #         # "pump", # добавлено через mask prompt
+            
+    #         # --- Техника на столе ---
+    #         "monitor",
+    #         "imac",
+
+    #         # --- Мелкие предметы на столе/переднем плане (Objects on desk/foreground) ---
+    #         "keyboard",
+    #         # "touchpad", # мусор, в cvat увидел, TODO: объединить с keyboard
+    #         "mouse",
+    #         # "usb adapter", # мусор, в cvat увидел (вообще нет его кажется)
+    #         "wire",
+    #         # "plug", # мусор, в cvat увидел (вообще нет его кажется)
+    #         # "battery", # мусор, в cvat увидел (вообще нет его кажется)
+    #         "paper",
+    #         # "screwdriver", # мусор, в cvat увидел (вообще нет его кажется)
+    #     ]
+    ALLOWED_PROMPTS = [
+        "wall",
+        "floor",
+        "table",
+    ]
+    merged = fill_config(
+        video_path="/workspace/2-half-blind-no-light-day_e3f",
+        output_dir="/workspace/sam3_batch_results_3023_16_01_2026_without_overlap_artefacts_all_text",
+        # output_video_name="merged_2-half-blind-no-light-day_3023_w_im_test_artef_new_overlap_probs.mp4",
+        output_video_name="wall_floor_table_only_no_smart_merge.mp4",
+        prompts=ALLOWED_PROMPTS,
+        show_box=True,
+        show_label=True,
+        show_mask=True,
+        show_original_image=True,
+        save_frames=False,
+        smart_merge=False,
+        # both_videos=True
+    )
+    print("Done!")
+    return merged
+
+def separate_videos_by_prompts():
     ALLOWED_PROMPTS = [
             # --- Архитектура и фон (Room Structure) ---
             "wall",
@@ -625,11 +720,11 @@ def run_3023_16_01_2026_config_without_overlap_artefacts():
             "illumination",
             "floor",
             "baseboard",
-            "concrete",
+            # "concrete",
             "column",
             "window",
             "door",
-            "pipe",
+            # "pipe",
             # "radiator", # мусор, убрал ранее
             "ventilation",
 
@@ -640,8 +735,8 @@ def run_3023_16_01_2026_config_without_overlap_artefacts():
             "window blind",
             "door handle",
             "blackboard",
-            "black plate",
-            "paperboard", # мусор, в cvat увидел, TODO: объединить с box
+            # "black plate",
+            # "paperboard", # мусор, в cvat увидел, TODO: объединить с box
 
             # --- Крупная мебель (Large Furniture) ---
             "cabinet",
@@ -652,13 +747,127 @@ def run_3023_16_01_2026_config_without_overlap_artefacts():
             "glass",
             # "inside of the cabinet", # мусор, в cvat увидел, TODO: объединить с cabinet
             "sofa",
-            "armrest",
-            "cushion", # необязательно
+            # "armrest", # необязательно
+            # "cushion", # необязательно
             "chair",
             "table",
             "bin",
 
             # --- Предметы в шкафу/на полках (Objects on shelves/background) ---
+            "lamp",
+            # "cardboard boxes", # мусор, в cvat увидел, TODO: объединить с box
+            "box",
+            # "router box", # мусор, в cvat увидел, TODO: объединить с box
+            # "package", # мусор, в cvat увидел, TODO: объединить с box
+            "frame",
+            "book",
+            "helmet",
+            # "vase", # добавлено через mask prompt
+            "mug",
+            # "black thing", # мусор, в cvat увидел (вообще нет его кажется)
+            # "statuette", # добавлено через mask prompt
+            "backpack",
+            # "pump", # добавлено через mask prompt
+            
+            # --- Техника на столе ---
+            "monitor",
+            "imac",
+
+            # --- Мелкие предметы на столе/переднем плане (Objects on desk/foreground) ---
+            "keyboard",
+            # "touchpad", # мусор, в cvat увидел, TODO: объединить с keyboard
+            "mouse",
+            # "usb adapter", # мусор, в cvat увидел (вообще нет его кажется)
+            "wire",
+            # "plug", # мусор, в cvat увидел (вообще нет его кажется)
+            # "battery", # мусор, в cvat увидел (вообще нет его кажется)
+            "paper",
+            # "screwdriver", # мусор, в cvat увидел (вообще нет его кажется)
+        ]
+    missed_prompts = [
+        "light switch",
+        "window blind",
+        "door handle",
+    ]
+    idxs = [ALLOWED_PROMPTS.index(prompt) for prompt in missed_prompts]
+    for idx in idxs:
+        prompt = ALLOWED_PROMPTS[idx]
+        # merged = fill_config(
+        #     video_path="/workspace/2-half-blind-no-light-day_e3f",
+        #     output_dir="/workspace/sam3_batch_results_3023_16_01_2026_without_overlap_artefacts_all_text",
+        #     # output_video_name="merged_2-half-blind-no-light-day_3023_w_im_test_artef_new_overlap_probs.mp4",
+        #     output_video_name=f"{prompt}_only_no_smart_merge.mp4",
+        #     prompts=[prompt,],
+        #     show_box=True,
+        #     show_label=True,
+        #     show_mask=True,
+        #     show_original_image=True,
+        #     save_frames=False,
+        #     smart_merge=False,
+        #     # both_videos=True
+        # )
+        safe_prompt = prompt.replace(" ", "_")
+        merged = fill_config(
+            video_path="/workspace/30_01_seq2_images",
+            # output_dir="/workspace/sam3_batch_results_30_01_seq2_images_without_overlap_artefacts_all_text",
+            output_dir="/workspace/sam3_batch_results_30_01_seq2_images_without_overlap_artefacts_all_text_1chunk",
+            # output_video_name="merged_2-half-blind-no-light-day_3023_w_im_test_artef_new_overlap_probs.mp4",
+            output_video_name=f"{idx}_{safe_prompt}_only_no_smart_merge.mp4",
+            prompts=[prompt,],
+            show_box=True,
+            show_label=True,
+            show_mask=True,
+            show_original_image=True,
+            save_frames=False,
+            smart_merge=False,
+            # both_videos=True
+        )
+    print("Done!")
+    return merged
+
+def run_30_01_seq2_images_config():
+    ALLOWED_PROMPTS = [
+            # --- Архитектура и фон (Room Structure) ---
+            "wall",
+            "ceiling",
+            "illumination",
+            "floor",
+            "baseboard",
+            # "concrete",
+            "column",
+            "window",
+            "door",
+            # "pipe",
+            # "radiator", # мусор, убрал ранее
+            "ventilation",
+
+            # --- Элементы на стенах (Fixtures) ---
+            "socket",
+            "switch",
+            "light switch",
+            "window blind",
+            "door handle",
+            "blackboard",
+            # "black plate",
+            # "paperboard", # мусор, в cvat увидел, TODO: объединить с box
+
+            # --- Крупная мебель (Large Furniture) ---
+            "cabinet",
+            # "wardrobe", # мусор, в cvat увидел (вообще нет его кажется)
+            # "cabinet wall", # мусор, в cvat увидел (вообще нет его кажется)
+            # "shelves", # необязательно
+            # "cabinet door", # мусор, в cvat увидел, TODO: объединить с cabinet
+            "glass",
+            # "inside of the cabinet", # мусор, в cvat увидел, TODO: объединить с cabinet
+            "sofa",
+            # "armrest", # необязательно
+            # "cushion", # необязательно
+            "chair",
+            "table",
+            "bin",
+
+            # --- Предметы в шкафу/на полках (Objects on shelves/background) ---
+            "lamp",
             # "cardboard boxes", # мусор, в cvat увидел, TODO: объединить с box
             "box",
             # "router box", # мусор, в cvat увидел, TODO: объединить с box
@@ -689,20 +898,21 @@ def run_3023_16_01_2026_config_without_overlap_artefacts():
             # "screwdriver", # мусор, в cvat увидел (вообще нет его кажется)
         ]
     merged = fill_config(
-        video_path="/workspace/2-half-blind-no-light-day_e3f",
-        output_dir="/workspace/sam3_batch_results_3023_16_01_2026_without_overlap_artefacts_all_text",
-        output_video_name="merged_2-half-blind-no-light-day_3023_with_image_without_overlap_artefacts_all_text.mp4",
+        video_path="/workspace/30_01_seq2_images",
+        output_dir="/workspace/sam3_batch_results_30_01_seq2_images_without_overlap_artefacts_all_text_1chunk",
+        # output_video_name="merged_2-half-blind-no-light-day_3023_w_im_test_artef_new_overlap_probs.mp4",
+        output_video_name="merged_30_01_seq2_images_with_image_no_smart_merge.mp4",
         prompts=ALLOWED_PROMPTS,
         show_box=True,
         show_label=True,
         show_mask=True,
         show_original_image=True,
         save_frames=False,
-        # both_videos=True
+        smart_merge=False,
+        both_videos=True
     )
     print("Done!")
     return merged
-
 
 if __name__ == "__main__":
     try:
@@ -714,7 +924,9 @@ if __name__ == "__main__":
         # run_config_seq1_2711()
         # run_3023_16_01_2026_config()
         # test_run_without_overlap_artefacts()
-        run_3023_16_01_2026_config_without_overlap_artefacts()
+        # run_3023_16_01_2026_config_without_overlap_artefacts()
+        separate_videos_by_prompts()
+        # run_30_01_seq2_images_config()
         send_message("Batch run completed successfully")
     except Exception as e:
         notify_error(e, "Критическая ошибка при выполнении batch_run_configs.py")
