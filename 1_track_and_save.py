@@ -332,6 +332,9 @@ def run_sam31(args, device, frame_names, frame_names_stems, input_masks, objects
                 orig_vid_width=inference_state["orig_width"],
                 feature_cache=inference_state["feature_cache"],
             )
+            # Mark this frame as having outputs so propagate_in_video doesn't
+            # raise "No prompts are received on any frames"
+            inference_state["previous_stages_out"][frame_idx] = "_THIS_FRAME_HAS_OUTPUTS_"
             print(f"  [SAM3.1] Objects {obj_ids_here} registered on frame {frame_idx}.")
 
         # ── 4. Initialise backbone_out (text features for _run_single_frame_inference) ──
