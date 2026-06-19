@@ -366,7 +366,7 @@ def run_sam31(args, device, frame_names, frame_names_stems, input_masks, objects
             demo_model.tracker.propagate_in_video_preflight(
                 sam2_state, run_mem_encoder=True
             )
-            for frame_idx, obj_ids_out, _low_res, video_res in demo_model.tracker.propagate_in_video(
+            for frame_idx, obj_ids_out, _low_res, video_res, *_ in demo_model.tracker.propagate_in_video(
                 sam2_state,
                 start_frame_idx=None,
                 max_frame_num_to_track=None,
