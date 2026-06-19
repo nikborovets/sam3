@@ -80,8 +80,15 @@ SEQUENCES    = ["state1_art", "state1_nat", "state2_art", "state2_nat", "state3_
 # BATCH_SIZE   = 241
 BATCH_SIZE   = 321
 # BATCH_SIZE   = 281
-SAVE_OVERLAY = False     # True  -> also write overlay PNGs alongside masks
-BIDIRECTIONAL = False    # True  -> run reverse propagation pass as well
+SAVE_OVERLAY  = False    # True  -> also write overlay PNGs alongside masks
+BIDIRECTIONAL = False    # True  -> run reverse propagation pass (sam3 only)
+
+# Model version: "sam3" or "sam3.1"
+# sam3.1 uses Object Multiplex — drastically lower GPU memory for multi-object tracking
+# (~7x speedup at 128 objects; ~17.7 GB on H100 for 5 objects).
+# Requires a separate checkpoint: sam3.1_multiplex.pt
+SAM3_VERSION     = "sam3"
+SAM3_WEIGHTS_31  = "/workspace/data_mount/model_weights/sam3.1/sam3.1_multiplex.pt"
 # ==================================================
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp"}
@@ -149,11 +156,14 @@ def run_batch(
     # --- 1. Track and save NPZ ---
     cmd_track = [
         "python", str(SAM3_DIR / "1_track_and_save.py"),
+        "--version",  SAM3_VERSION,
         "--inputs",   str(rgb_tmp),
         "--masks",    str(masks_tmp),
         "--labelmap", str(labelmap),
         "--out-npz",  str(npz_tmp),
     ]
+    if SAM3_VERSION == "sam3.1":
+        cmd_track += ["--weights-31", SAM3_WEIGHTS_31]
     if BIDIRECTIONAL:
         cmd_track.append("--bidirectional")
 
