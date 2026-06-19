@@ -205,7 +205,8 @@ def _build_tracker_metadata_31(all_obj_ids, device):
             "N_obj":                    n_objects,
             "obj_first_frame":          torch.zeros(n_objects, dtype=torch.long,  device=device),
             "consecutive_unmatch_count":torch.zeros(n_objects, dtype=torch.long,  device=device),
-            "trk_keep_alive":           torch.ones(n_objects,  dtype=torch.bool,  device=device),
+            # must be torch.long (integer counter), not bool
+            "trk_keep_alive":           torch.zeros(n_objects, dtype=torch.long,  device=device),
             "removed_mask":             torch.zeros(n_objects, dtype=torch.bool,  device=device),
             "overlap_pair_counts":      torch.zeros((n_objects, n_objects), dtype=torch.long, device=device),
             "last_occluded_tensor":     torch.zeros(n_objects, dtype=torch.long,  device=device),
