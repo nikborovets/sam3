@@ -88,6 +88,7 @@ BIDIRECTIONAL = False    # True  -> run reverse propagation pass (sam3 only)
 # (~7x speedup at 128 objects; ~17.7 GB on H100 for 5 objects).
 # Requires a separate checkpoint: sam3.1_multiplex.pt
 SAM3_VERSION     = "sam3"
+# SAM3_VERSION     = "sam3.1"
 SAM3_WEIGHTS_31  = "/workspace/data_mount/model_weights/sam3.1/sam3.1_multiplex.pt"
 # ==================================================
 
