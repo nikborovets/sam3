@@ -306,11 +306,10 @@ def run_sam31(args, device, frame_names, frame_names_stems, input_masks, objects
     try:
 
         # ── 3. Backbone features + mask registration ──────────────────────
-        # Each object is initialised from its FIRST annotated frame.
-        # add_new_masks(add_to_existing_state=True) requires the frame to have
-        # been propagated already, so we never call it on unvisited frames.
-        # Instead we group new objects by their first annotated frame and call
-        # _tracker_add_new_objects once per group.
+        # Group objects by their first annotated frame. For each group, force
+        # creation of a fresh SAM2 sub-state by passing tracker_states_local=[].
+        # This avoids is_multiplex_dynamic reuse which would try to call
+        # add_new_masks on a state initialized at a different frame.
         obj_first_frame: dict[int, int] = {}
         for frame_idx in sorted(frame_to_masks.keys()):
             for obj_id in frame_to_masks[frame_idx]:
@@ -321,6 +320,7 @@ def run_sam31(args, device, frame_names, frame_names_stems, input_masks, objects
         for obj_id, first_frame in obj_first_frame.items():
             frame_to_new_objs[first_frame].append(obj_id)
 
+        all_new_states = []
         for frame_idx in sorted(frame_to_new_objs.keys()):
             demo_model._prepare_backbone_feats(inference_state, frame_idx, reverse=False)
             obj_ids_here = sorted(frame_to_new_objs[frame_idx])
@@ -330,31 +330,51 @@ def run_sam31(args, device, frame_names, frame_names_stems, input_masks, objects
                 for oid in obj_ids_here
             ]).to(device)
 
-            inference_state["sam2_inference_states"] = demo_model._tracker_add_new_objects(
+            # Pass [] to force a fresh SAM2 sub-state per annotation-frame group.
+            # is_multiplex_dynamic=True would otherwise reuse an existing state and
+            # call add_new_masks with a different frame_idx → "No existing output"
+            new_states = demo_model._tracker_add_new_objects(
                 frame_idx=frame_idx,
                 num_frames=inference_state["num_frames"],
                 new_obj_ids=obj_ids_here,
                 new_obj_masks=masks_float,
-                tracker_states_local=inference_state["sam2_inference_states"],
+                tracker_states_local=[],
                 orig_vid_height=inference_state["orig_height"],
                 orig_vid_width=inference_state["orig_width"],
                 feature_cache=inference_state["feature_cache"],
             )
-            # Mark this frame as having outputs so propagate_in_video doesn't
-            # raise "No prompts are received on any frames"
+            all_new_states.extend(new_states)
             inference_state["previous_stages_out"][frame_idx] = "_THIS_FRAME_HAS_OUTPUTS_"
             print(f"  [SAM3.1] Objects {obj_ids_here} registered on frame {frame_idx}.")
 
-        # ── 4. Initialise backbone_out (text features for _run_single_frame_inference) ──
+        inference_state["sam2_inference_states"] = all_new_states
+
+        # ── 4. Initialise backbone_out ────────────────────────────────────
         inference_state["backbone_out"] = demo_model._init_backbone_out(inference_state)
 
         # ── 5. Build tracker_metadata ─────────────────────────────────────
         inference_state["tracker_metadata"] = _build_tracker_metadata_31(all_obj_ids, device)
-        # num_buc_per_gpu is required by multiplex propagation
         num_buc = demo_model._count_buckets_in_states(inference_state["sam2_inference_states"])
         inference_state["tracker_metadata"]["num_buc_per_gpu"] = np.array([num_buc], dtype=np.int64)
 
-        # ── 6. Forward propagation ────────────────────────────────────────
+        # ── 6. Pre-populate cached_frame_outputs & steer to propagation_partial ──
+        # SAM3.1 has 3 propagation modes decided by action_history:
+        #   - propagation_full  (empty history) → runs the full detector+tracker
+        #     pipeline on every frame, requires text prompts, garbage without them
+        #   - propagation_partial (last action = "add"/"refine") → pure SAM2 memory
+        #     propagation for the specified obj_ids, equivalent to SAM3/SAM2 quality
+        #   - propagation_fetch → returns cached VG predictions
+        #
+        # We want propagation_partial. Additionally, _build_sam2_output only writes
+        # masks if cached_frame_outputs[frame_idx] already exists (even as {}), so
+        # we pre-populate it so SAM2 masks are written to the output.
+        for fidx in range(inference_state["num_frames"]):
+            inference_state["cached_frame_outputs"][fidx] = {}
+        demo_model.add_action_history(
+            inference_state, action_type="add", obj_ids=all_obj_ids
+        )
+
+        # ── 7. Forward propagation ────────────────────────────────────────
         print("Propagating video (forward, SAM3.1) and saving…")
         len_frame_names = len(frame_names)
 
@@ -382,13 +402,10 @@ def run_sam31(args, device, frame_names, frame_names_stems, input_masks, objects
                 f.result()
 
         if args.bidirectional:
-            # NOTE: SAM3.1 action_history after forward propagation causes the next call
-            # to return "propagation_fetch" (cached results), not true reverse propagation.
-            # For bidirectional support, use --version sam3 instead.
             print("  [SAM3.1] WARNING: bidirectional not supported for sam3.1, skipping reverse pass.")
 
     finally:
-        # ── 7. Close session (gc + empty_cache) ──────────────────────────
+        # ── 8. Close session (gc + empty_cache) ──────────────────────────
         predictor.handle_request({"type": "close_session", "session_id": session_id})
 
 
