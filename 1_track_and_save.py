@@ -232,35 +232,43 @@ def run_sam31(args, device, frame_names, frame_names_stems, input_masks, objects
       7. handle_stream_request("propagate_in_video")  →  yields per-frame outputs
       8. close_session  →  gc.collect + torch.cuda.empty_cache
     """
+    import uuid
     from sam3.model_builder import build_sam3_predictor
 
     ckpt = args.weights_31
-    # fall back to auto-download if local file does not exist
-    load_from_hf = not os.path.isfile(ckpt)
-    if load_from_hf:
+    if not os.path.isfile(ckpt):
         print(f"[SAM3.1] checkpoint not found at {ckpt!r}, downloading from HuggingFace…")
         ckpt = None
 
+    # use_rope_real=False matches the published sam3.1_multiplex.pt checkpoint format;
+    # set True only when using a checkpoint trained with real-valued RoPE.
     predictor = build_sam3_predictor(
         version="sam3.1",
         checkpoint_path=ckpt,
         bpe_path='/workspace/sam3/sam3/assets/bpe_simple_vocab_16e6.txt.gz',
-        use_fa3=False,        # set True only if H100/H200 with FA3 installed
-        use_rope_real=True,
+        use_fa3=False,          # set True only on H100/H200 with FA3 installed
+        use_rope_real=False,
         async_loading_frames=True,
     )
     demo_model = predictor.model   # Sam3MultiplexTrackingWithInteractivity
 
     input_path = Path(args.inputs)
 
-    # ── 1. Start session ──────────────────────────────────────────────────
-    session_resp = predictor.handle_request({
-        "type":               "start_session",
-        "resource_path":      str(input_path),
-        "offload_video_to_cpu": True,
-    })
-    session_id       = session_resp["session_id"]
-    inference_state  = predictor._all_inference_states[session_id]["state"]
+    # ── 1. Init state directly (bypasses Sam3BasePredictor.start_session which
+    #        always forwards offload_state_to_cpu, a kwarg Sam3MultiplexTracking
+    #        does not accept) ────────────────────────────────────────────────
+    inference_state = demo_model.init_state(
+        resource_path=str(input_path),
+        offload_video_to_cpu=True,
+        async_loading_frames=True,
+    )
+    session_id = str(uuid.uuid4())
+    predictor._all_inference_states[session_id] = {
+        "state":         inference_state,
+        "session_id":    session_id,
+        "start_time":    time.time(),
+        "last_use_time": time.time(),
+    }
 
     try:
         # ── 2. Parse annotation frames ────────────────────────────────────
