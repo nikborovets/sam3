@@ -267,20 +267,13 @@ def run_sam31(args, device, frame_names, frame_names_stems, input_masks, objects
         print("No annotated objects found – skipping SAM3.1 tracking.")
         return
 
-    # ── 2. Build predictor with object-count-aware settings ───────────────
-    # multiplex_count controls objects-per-bucket; larger = fewer buckets =
-    # less total memory. With propagation_partial we never need detector
-    # capacity headroom, so max_num_objects = exact annotated count is fine.
-    # Round up to the next multiple of multiplex_count.
-    min_needed     = len(all_obj_ids)
-    multiplex_count = 32          # objects per SAM2 bucket; 32 halves bucket count vs default 16
-    max_num_objects = max(multiplex_count,
-                          ((min_needed + multiplex_count - 1) // multiplex_count) * multiplex_count)
-    print(f"  [SAM3.1] Building predictor: {min_needed} objects, "
-          f"max_num_objects={max_num_objects}, multiplex_count={multiplex_count}")
-
-    # Reduce CUDA fragmentation — especially helpful with many short-lived tensors
-    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    # ── 2. Build predictor ────────────────────────────────────────────────
+    # We use SAM3.1 only for its backbone/SAM2-tracker weights; the multiplex
+    # detection pipeline is bypassed entirely.  max_num_objects must be >= the
+    # annotated object count (rounded to the nearest multiple of 16).
+    min_needed      = len(all_obj_ids)
+    max_num_objects = max(16, ((min_needed + 15) // 16) * 16)
+    print(f"  [SAM3.1] Building predictor: {min_needed} objects, max_num_objects={max_num_objects}")
 
     # use_rope_real=False matches the published sam3.1_multiplex.pt checkpoint format;
     # set True only when using a checkpoint trained with real-valued RoPE.
@@ -292,7 +285,6 @@ def run_sam31(args, device, frame_names, frame_names_stems, input_masks, objects
         use_rope_real=False,
         async_loading_frames=True,
         max_num_objects=max_num_objects,
-        multiplex_count=multiplex_count,
     )
     demo_model = predictor.model   # Sam3MultiplexTrackingWithInteractivity
 
@@ -358,55 +350,47 @@ def run_sam31(args, device, frame_names, frame_names_stems, input_masks, objects
 
         inference_state["sam2_inference_states"] = all_new_states
 
-        # ── 4. Initialise backbone_out ────────────────────────────────────
-        inference_state["backbone_out"] = demo_model._init_backbone_out(inference_state)
+        # ── 4. Propagate via SAM2 sub-tracker directly ────────────────────
+        # We bypass the SAM3.1 multiplex propagation pipeline (which requires
+        # the detector + text prompts and runs all buckets simultaneously) and
+        # call the inner SAM2 tracker per sub-state sequentially.  This gives
+        # SAM3/SAM2-quality results and avoids peak-memory spikes from running
+        # many multiplex buckets at the same time.
+        print("Propagating video (forward, SAM3.1 via SAM2 sub-tracker) and saving…")
 
-        # ── 5. Build tracker_metadata ─────────────────────────────────────
-        inference_state["tracker_metadata"] = _build_tracker_metadata_31(all_obj_ids, device)
-        num_buc = demo_model._count_buckets_in_states(inference_state["sam2_inference_states"])
-        inference_state["tracker_metadata"]["num_buc_per_gpu"] = np.array([num_buc], dtype=np.int64)
+        # Accumulate per-frame masks across all states; later states overwrite
+        # earlier ones only for obj_ids they own (no overlap by construction).
+        per_frame_masks: dict[int, dict[str, np.ndarray]] = {}
 
-        # ── 6. Pre-populate cached_frame_outputs & steer to propagation_partial ──
-        # SAM3.1 has 3 propagation modes decided by action_history:
-        #   - propagation_full  (empty history) → runs the full detector+tracker
-        #     pipeline on every frame, requires text prompts, garbage without them
-        #   - propagation_partial (last action = "add"/"refine") → pure SAM2 memory
-        #     propagation for the specified obj_ids, equivalent to SAM3/SAM2 quality
-        #   - propagation_fetch → returns cached VG predictions
-        #
-        # We want propagation_partial. Additionally, _build_sam2_output only writes
-        # masks if cached_frame_outputs[frame_idx] already exists (even as {}), so
-        # we pre-populate it so SAM2 masks are written to the output.
-        for fidx in range(inference_state["num_frames"]):
-            inference_state["cached_frame_outputs"][fidx] = {}
-        demo_model.add_action_history(
-            inference_state, action_type="add", obj_ids=all_obj_ids
-        )
+        for sam2_state in all_new_states:
+            demo_model.tracker.propagate_in_video_preflight(
+                sam2_state, run_mem_encoder=True
+            )
+            for frame_idx, obj_ids_out, _low_res, video_res in demo_model.tracker.propagate_in_video(
+                sam2_state,
+                start_frame_idx=None,
+                max_frame_num_to_track=None,
+                reverse=False,
+            ):
+                # video_res: [n_obj, 1, H, W] float32 logits; >0 → foreground
+                binary = (video_res[:, 0] > 0.0).cpu().numpy()  # [n_obj, H, W] bool
+                frame_dict = per_frame_masks.setdefault(frame_idx, {})
+                for oid, mask in zip(obj_ids_out, binary):
+                    frame_dict[str(oid)] = mask
 
-        # ── 7. Forward propagation ────────────────────────────────────────
-        print("Propagating video (forward, SAM3.1) and saving…")
-        len_frame_names = len(frame_names)
+            # Release memory before processing next sub-state
+            torch.cuda.empty_cache()
 
+        # Write NPZ files using a thread pool
         with ThreadPoolExecutor(max_workers=8) as executor:
-            futures = []
-            for resp in predictor.handle_stream_request({
-                "type":                  "propagate_in_video",
-                "session_id":            session_id,
-                "propagation_direction": "forward",
-            }):
-                out_frame_idx    = resp["frame_index"]
-                outputs          = resp["outputs"]
-                out_obj_ids      = outputs["out_obj_ids"]      # np.ndarray[int]
-                out_binary_masks = outputs["out_binary_masks"] # np.ndarray[bool] [N,H,W]
-
-                frame_mask_dict = {
-                    str(out_obj_ids[i]): out_binary_masks[i]
-                    for i in range(len(out_obj_ids))
-                }
-                fname = frame_names[out_frame_idx].stem
-                futures.append(executor.submit(
-                    _save_npz, out_npz_path / f"{fname}.npz", frame_mask_dict
-                ))
+            futures = [
+                executor.submit(
+                    _save_npz,
+                    out_npz_path / f"{frame_names[fidx].stem}.npz",
+                    per_frame_masks.get(fidx, {}),
+                )
+                for fidx in range(len(frame_names))
+            ]
             for f in futures:
                 f.result()
 
