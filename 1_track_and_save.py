@@ -298,51 +298,41 @@ def run_sam31(args, device, frame_names, frame_names_stems, input_masks, objects
             return
 
         # ── 3. Backbone features + mask registration ──────────────────────
-        first_frame_idx = sorted(frame_to_masks.keys())[0]
-
+        # Each object is initialised from its FIRST annotated frame.
+        # add_new_masks(add_to_existing_state=True) requires the frame to have
+        # been propagated already, so we never call it on unvisited frames.
+        # Instead we group new objects by their first annotated frame and call
+        # _tracker_add_new_objects once per group.
+        obj_first_frame: dict[int, int] = {}
         for frame_idx in sorted(frame_to_masks.keys()):
-            # Run backbone+detector for this frame and cache image features
-            demo_model._prepare_backbone_feats(inference_state, frame_idx, reverse=False)
+            for obj_id in frame_to_masks[frame_idx]:
+                if obj_id not in obj_first_frame:
+                    obj_first_frame[obj_id] = frame_idx
 
-            frame_masks   = frame_to_masks[frame_idx]
-            obj_ids_here  = sorted(frame_masks.keys())
-            masks_float   = torch.stack([
+        frame_to_new_objs: dict[int, list[int]] = defaultdict(list)
+        for obj_id, first_frame in obj_first_frame.items():
+            frame_to_new_objs[first_frame].append(obj_id)
+
+        for frame_idx in sorted(frame_to_new_objs.keys()):
+            demo_model._prepare_backbone_feats(inference_state, frame_idx, reverse=False)
+            obj_ids_here = sorted(frame_to_new_objs[frame_idx])
+            frame_masks  = frame_to_masks[frame_idx]
+            masks_float  = torch.stack([
                 torch.from_numpy(frame_masks[oid].astype(np.float32))
                 for oid in obj_ids_here
-            ]).to(device)   # [N, H, W]
+            ]).to(device)
 
-            if frame_idx == first_frame_idx:
-                # First annotation frame: register ALL objects, create SAM2 sub-states
-                inference_state["sam2_inference_states"] = demo_model._tracker_add_new_objects(
-                    frame_idx=frame_idx,
-                    num_frames=inference_state["num_frames"],
-                    new_obj_ids=obj_ids_here,
-                    new_obj_masks=masks_float,
-                    tracker_states_local=inference_state["sam2_inference_states"],
-                    orig_vid_height=inference_state["orig_height"],
-                    orig_vid_width=inference_state["orig_width"],
-                    feature_cache=inference_state["feature_cache"],
-                )
-                print(f"  [SAM3.1] Objects {obj_ids_here} registered on frame {frame_idx}.")
-            else:
-                # Subsequent frames: add conditioning masks for already-registered objects
-                for sam2_state in inference_state["sam2_inference_states"]:
-                    existing = sam2_state.get("obj_ids", [])
-                    obj_ids_in_state = [oid for oid in obj_ids_here if oid in existing]
-                    if not obj_ids_in_state:
-                        continue
-                    state_masks = torch.stack([
-                        masks_float[obj_ids_here.index(oid)]
-                        for oid in obj_ids_in_state
-                    ])
-                    demo_model.tracker.add_new_masks(
-                        inference_state=sam2_state,
-                        frame_idx=frame_idx,
-                        obj_ids=obj_ids_in_state,
-                        masks=state_masks,
-                        add_mask_to_memory=False,
-                    )
-                print(f"  [SAM3.1] Conditioning masks updated on frame {frame_idx}.")
+            inference_state["sam2_inference_states"] = demo_model._tracker_add_new_objects(
+                frame_idx=frame_idx,
+                num_frames=inference_state["num_frames"],
+                new_obj_ids=obj_ids_here,
+                new_obj_masks=masks_float,
+                tracker_states_local=inference_state["sam2_inference_states"],
+                orig_vid_height=inference_state["orig_height"],
+                orig_vid_width=inference_state["orig_width"],
+                feature_cache=inference_state["feature_cache"],
+            )
+            print(f"  [SAM3.1] Objects {obj_ids_here} registered on frame {frame_idx}.")
 
         # ── 4. Initialise backbone_out (text features for _run_single_frame_inference) ──
         inference_state["backbone_out"] = demo_model._init_backbone_out(inference_state)
