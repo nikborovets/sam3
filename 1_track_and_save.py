@@ -267,12 +267,20 @@ def run_sam31(args, device, frame_names, frame_names_stems, input_masks, objects
         print("No annotated objects found – skipping SAM3.1 tracking.")
         return
 
-    # ── 2. Build predictor with object-count-aware max_num_objects ────────
-    # Must exceed the number of annotated objects + headroom for detector
-    # detections during propagation. Round up to next multiple of 16.
-    min_needed = len(all_obj_ids)
-    max_num_objects = max(128, ((min_needed + 15) // 16) * 16)
-    print(f"  [SAM3.1] Building predictor with max_num_objects={max_num_objects} for {min_needed} annotated objects.")
+    # ── 2. Build predictor with object-count-aware settings ───────────────
+    # multiplex_count controls objects-per-bucket; larger = fewer buckets =
+    # less total memory. With propagation_partial we never need detector
+    # capacity headroom, so max_num_objects = exact annotated count is fine.
+    # Round up to the next multiple of multiplex_count.
+    min_needed     = len(all_obj_ids)
+    multiplex_count = 32          # objects per SAM2 bucket; 32 halves bucket count vs default 16
+    max_num_objects = max(multiplex_count,
+                          ((min_needed + multiplex_count - 1) // multiplex_count) * multiplex_count)
+    print(f"  [SAM3.1] Building predictor: {min_needed} objects, "
+          f"max_num_objects={max_num_objects}, multiplex_count={multiplex_count}")
+
+    # Reduce CUDA fragmentation — especially helpful with many short-lived tensors
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
     # use_rope_real=False matches the published sam3.1_multiplex.pt checkpoint format;
     # set True only when using a checkpoint trained with real-valued RoPE.
@@ -284,6 +292,7 @@ def run_sam31(args, device, frame_names, frame_names_stems, input_masks, objects
         use_rope_real=False,
         async_loading_frames=True,
         max_num_objects=max_num_objects,
+        multiplex_count=multiplex_count,
     )
     demo_model = predictor.model   # Sam3MultiplexTrackingWithInteractivity
 
