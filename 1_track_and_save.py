@@ -7,6 +7,7 @@ from pathlib import Path
 from tqdm import tqdm
 import gc
 import psutil
+from concurrent.futures import ThreadPoolExecutor
 from sam3.model_builder import build_sam3_video_model
 
 import os
@@ -62,6 +63,9 @@ def get_mem_report():
     
     return report
 
+def _save_npz(path, mask_dict):
+    np.savez_compressed(path, **mask_dict)
+
 def load_objects_from_labelmap(path):
     objects = []
     with open(path, 'r') as f:
@@ -94,7 +98,7 @@ def main():
         load_from_HF=False, 
         bpe_path='/workspace/sam3/sam3/assets/bpe_simple_vocab_16e6.txt.gz'
     )
-    send_message(f"Model loaded. {get_mem_report()}")
+    # send_message(f"Model loaded. {get_mem_report()}")
     predictor = sam3_model.tracker
     predictor.backbone = sam3_model.detector.backbone
     predictor.non_overlap_masks_for_output = True
@@ -141,39 +145,44 @@ def main():
     
     print("Propagating video (forward) and saving to disk...")
     len_frame_names = len(frame_names)
-    report_every = max(1, len_frame_names // 20)
-    
-    for out_frame_idx, out_obj_ids, _, out_mask_logits, _ in predictor.propagate_in_video(inference_state, start_frame_idx=0, max_frame_num_to_track=None, reverse=False, propagate_preflight=True):
-        
-        # Prepare boolean mask dictionary for the current frame
-        frame_mask_dict = {
-            str(out_obj_id): (out_mask_logits[i] > 0.0).cpu().numpy().squeeze()
-            for i, out_obj_id in enumerate(out_obj_ids)
-        }
-        
-        # Save immediately to NPZ
-        # Using the original stem name of the frame to map it easily later
-        fname = frame_names[out_frame_idx].stem
-        np.savez_compressed(out_npz_path / f"{fname}.npz", **frame_mask_dict)
-        
-        if out_frame_idx > 0 and out_frame_idx % report_every == 0:
-            send_message(f"Forward progress: {out_frame_idx}/{len_frame_names} ({out_frame_idx/len_frame_names:.0%}). {get_mem_report()}")
+    report_every = max(1, len_frame_names // 2)
 
-    if args.bidirectional:
-        print("Propagating video (reverse) and saving to disk...")
-        for out_frame_idx, out_obj_ids, _, out_mask_logits, _ in predictor.propagate_in_video(inference_state, start_frame_idx=len_frame_names - 1, max_frame_num_to_track=None, reverse=True, propagate_preflight=True):
-            
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = []
+        for out_frame_idx, out_obj_ids, _, out_mask_logits, _ in predictor.propagate_in_video(inference_state, start_frame_idx=0, max_frame_num_to_track=None, reverse=False, propagate_preflight=True):
+
             frame_mask_dict = {
                 str(out_obj_id): (out_mask_logits[i] > 0.0).cpu().numpy().squeeze()
                 for i, out_obj_id in enumerate(out_obj_ids)
             }
             fname = frame_names[out_frame_idx].stem
-            np.savez_compressed(out_npz_path / f"{fname}.npz", **frame_mask_dict)
-            
-            # Since we iterate backwards
-            progress_idx = len_frame_names - 1 - out_frame_idx
-            if progress_idx > 0 and progress_idx % report_every == 0:
-                send_message(f"Reverse progress: {progress_idx}/{len_frame_names} ({progress_idx/len_frame_names:.0%}). {get_mem_report()}")
+            futures.append(executor.submit(_save_npz, out_npz_path / f"{fname}.npz", frame_mask_dict))
+
+            # if out_frame_idx > 0 and out_frame_idx % report_every == 0:
+            #     send_message(f"Forward progress: {out_frame_idx}/{len_frame_names} ({out_frame_idx/len_frame_names:.0%}). {get_mem_report()}")
+
+        for f in futures:
+            f.result()
+
+    if args.bidirectional:
+        print("Propagating video (reverse) and saving to disk...")
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            futures = []
+            for out_frame_idx, out_obj_ids, _, out_mask_logits, _ in predictor.propagate_in_video(inference_state, start_frame_idx=len_frame_names - 1, max_frame_num_to_track=None, reverse=True, propagate_preflight=True):
+
+                frame_mask_dict = {
+                    str(out_obj_id): (out_mask_logits[i] > 0.0).cpu().numpy().squeeze()
+                    for i, out_obj_id in enumerate(out_obj_ids)
+                }
+                fname = frame_names[out_frame_idx].stem
+                futures.append(executor.submit(_save_npz, out_npz_path / f"{fname}.npz", frame_mask_dict))
+
+                progress_idx = len_frame_names - 1 - out_frame_idx
+                # if progress_idx > 0 and progress_idx % report_every == 0:
+                #     send_message(f"Reverse progress: {progress_idx}/{len_frame_names} ({progress_idx/len_frame_names:.0%}). {get_mem_report()}")
+
+            for f in futures:
+                f.result()
 
     send_message(f"Propagation finished. {get_mem_report()}")
 

@@ -1,3 +1,4 @@
+import os
 import shutil
 import re
 from pathlib import Path
@@ -80,22 +81,35 @@ def pick_every_n_frames_input():
         copy_every_n_frames(input_dir, output_dir, step)
 
 def pick_every_n_frames_masks():
-    step = 15
+    # step = 15
+    step = 80
     # anno_name = "seq4_aruna_anno_4iter"
     # anno_name = "02-16-26_seq6_aruna_anno_1iter"
     # anno_names = ["seq1-job-53_results", "seq2-job-54_results", "seq3-job-55_results", "seq4-job-56_results", "seq5-job-57_results"]
     # /home/n.borovets/user/segment_experiments/3023-A5-SAM3-results/seq1-job-53_results
 
-    anno_names = ["seq1_rs_export_11-03-26_results", "seq2_orbbec_export_11-03-26_results", "seq2_rs_export_11-03-26_results", "seq3_orbbec_export_11-03-26_results"]
+    # anno_names = ["seq1_rs_export_11-03-26_results", "seq2_orbbec_export_11-03-26_results", "seq2_rs_export_11-03-26_results", "seq3_orbbec_export_11-03-26_results"]
+    # anno_dir_name = "/workspace/03-27-26_E-A4-3024-SAM3-results"
+    # anno_dir_name = "/workspace/04-02-26-biology-lab-SAM3-results"
+    # anno_dir_name = "/workspace/sam_anno_input_output/04-17-26-C3-2040-SAM3-results"
+    anno_dir_name = "/workspace/sam_anno_input_output/04-23-2026-living-room-1-SAM3-results"
+    num_stage_dir = "1stage"
+    # anno_names = sorted(os.listdir("/workspace/03-25-26_E-R1-1023-SAM3-results/1stage"))
+    anno_names = sorted(os.listdir(f"{anno_dir_name}/{num_stage_dir}"))
     # "seq1_orbbec_export_11-03-26_results"
 
     for anno_name in anno_names:
         # input_dir = Path(f"/workspace/3023-A5-SAM3-results/{anno_name}/masks")
         # output_dir = Path(f"/workspace/3023-A5-SAM3-results/{anno_name}/masks_every_{step}")
-        input_dir = Path(f"/workspace/data_mount/third_wave_tracker_rgb_input/every_n_frames/E-1023-R1-rgb/results_every_5/{anno_name}/masks")
-        output_dir = Path(f"/workspace/data_mount/third_wave_tracker_rgb_input/every_n_frames/E-1023-R1-rgb/result_masks_every_{step*5}/{anno_name}")
+        # input_dir = Path(f"/workspace/data_mount/third_wave_tracker_rgb_input/every_n_frames/E-1023-R1-rgb/results_every_5/{anno_name}/masks")
+        # output_dir = Path(f"/workspace/data_mount/third_wave_tracker_rgb_input/every_n_frames/E-1023-R1-rgb/result_masks_every_{step*5}/{anno_name}")
+        input_dir = Path(f"{anno_dir_name}/{num_stage_dir}/{anno_name}/masks_out")
+        output_dir = Path(f"{anno_dir_name}/result_masks_every_{step}/{num_stage_dir}/{anno_name}_masks_every_{step}")
+        os.makedirs(output_dir, exist_ok=True)
 
-        list_file_path = Path(f"/workspace/data_mount/third_wave_tracker_rgb_input/every_n_frames/E-1023-R1-rgb/result_masks_every_{step*5}/{anno_name}_masks_every_{step*5}_list.txt")
+        # list_file_path = Path(f"/workspace/data_mount/third_wave_tracker_rgb_input/every_n_frames/E-1023-R1-rgb/result_masks_every_{step*5}/{anno_name}_masks_every_{step*5}_list.txt")
+        list_file_path = Path(f"{anno_dir_name}/result_masks_every_{step}/{num_stage_dir}/{anno_name}_masks_every_{step}_list.txt")
+        print(f"list_file_path: {list_file_path}")
         # 1. Выполняем выборку и копирование
         copy_every_n_frames(input_dir, output_dir, step)
         

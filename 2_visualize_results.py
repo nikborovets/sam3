@@ -32,6 +32,7 @@ def parse_args():
     parser.add_argument("--labelmap", type=str, default=DEFAULT_LABELMAP, help="Path to labelmap.txt")
     parser.add_argument("--out-overlay", type=str, default=DEFAULT_OUT_OVERLAY, help="Output folder for overlays")
     parser.add_argument("--out-masks", type=str, default=DEFAULT_OUT_MASKS, help="Output folder for binary masks")
+    parser.add_argument("--no-overlay", action="store_true", help="Skip saving overlay images (saves disk space and time)")
     return parser.parse_args()
 
 def get_mem_report():
@@ -62,9 +63,11 @@ def main():
     npz_files = sorted(list(in_npz_path.glob("*.npz")))
     print(f"Total NPZ mask files found: {len(npz_files)}")
     
+    save_overlay = not args.no_overlay
     out_overlay_path = Path(args.out_overlay)
     out_masks_path = Path(args.out_masks)
-    out_overlay_path.mkdir(parents=True, exist_ok=True)
+    if save_overlay:
+        out_overlay_path.mkdir(parents=True, exist_ok=True)
     out_masks_path.mkdir(parents=True, exist_ok=True)
 
     objects = load_objects_from_labelmap(args.labelmap)
@@ -74,7 +77,7 @@ def main():
     frame_dict = {p.stem: p for p in frame_names}
     
     total_to_save = len(npz_files)
-    report_every = max(1, total_to_save // 10)
+    report_every = max(1, total_to_save // 2)
 
     print("Generating and saving overlays...")
     for i, npz_path in enumerate(tqdm(npz_files)):
@@ -110,14 +113,15 @@ def main():
             res_mask_rgb[target_pixels] = color_rgb
             overlay[mask_bool] = (overlay[mask_bool] * 0.4 + color_bgr * 0.6).astype(np.uint8)
 
-        cv2.imwrite(f"{out_overlay_path}/{fname}.png", overlay)
+        if save_overlay:
+            cv2.imwrite(f"{out_overlay_path}/{fname}.png", overlay)
         cv2.imwrite(f"{out_masks_path}/{fname}.png", cv2.cvtColor(res_mask_rgb, cv2.COLOR_RGB2BGR))
         
         # Cleanup memory immediately
         loaded_npz.close()
         
         if i > 0 and i % report_every == 0:
-            send_message(f"Rendering progress: {i}/{total_to_save} ({i/total_to_save:.0%}). {get_mem_report()}")
+            # send_message(f"Rendering progress: {i}/{total_to_save} ({i/total_to_save:.0%}). {get_mem_report()}")
             gc.collect()
 
     send_message(f"Rendering finished. {get_mem_report()}")
