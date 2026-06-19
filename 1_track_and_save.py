@@ -342,6 +342,9 @@ def run_sam31(args, device, frame_names, frame_names_stems, input_masks, objects
 
         # ── 5. Build tracker_metadata ─────────────────────────────────────
         inference_state["tracker_metadata"] = _build_tracker_metadata_31(all_obj_ids, device)
+        # num_buc_per_gpu is required by multiplex propagation
+        num_buc = demo_model._count_buckets_in_states(inference_state["sam2_inference_states"])
+        inference_state["tracker_metadata"]["num_buc_per_gpu"] = np.array([num_buc], dtype=np.int64)
 
         # ── 6. Forward propagation ────────────────────────────────────────
         print("Propagating video (forward, SAM3.1) and saving…")
