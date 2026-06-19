@@ -350,38 +350,66 @@ def run_sam31(args, device, frame_names, frame_names_stems, input_masks, objects
 
         inference_state["sam2_inference_states"] = all_new_states
 
-        # ── 4. Propagate via SAM2 sub-tracker directly ────────────────────
-        # We bypass the SAM3.1 multiplex propagation pipeline (which requires
-        # the detector + text prompts and runs all buckets simultaneously) and
-        # call the inner SAM2 tracker per sub-state sequentially.  This gives
-        # SAM3/SAM2-quality results and avoids peak-memory spikes from running
-        # many multiplex buckets at the same time.
+        # ── 4. Propagate via SAM2 sub-tracker sequentially ───────────────
+        # We use pure SAM2 memory-based propagation (no detector) by calling
+        # _prepare_backbone_feats + _propogate_tracker_one_frame_local_gpu
+        # for each sub-state ONE AT A TIME.
+        #
+        # Key design detail: sam2_state["cached_features"] and
+        # inference_state["feature_cache"] are THE SAME dict object
+        # (set via tracker.init_state(cached_features=feature_cache)).
+        # So _prepare_backbone_feats(outer_state, frame_idx) populates the
+        # cache that _propogate_tracker_one_frame_local_gpu reads — no images
+        # key needed in the sub-state.
+        #
+        # Processing each state sequentially keeps peak memory = max(state),
+        # avoiding the OOM caused by propagation_partial running all states
+        # simultaneously.
         print("Propagating video (forward, SAM3.1 via SAM2 sub-tracker) and saving…")
 
-        # Accumulate per-frame masks across all states; later states overwrite
-        # earlier ones only for obj_ids they own (no overlap by construction).
+        H_video = inference_state["orig_height"]
+        W_video = inference_state["orig_width"]
+
         per_frame_masks: dict[int, dict[str, np.ndarray]] = {}
 
         for sam2_state in all_new_states:
             demo_model.tracker.propagate_in_video_preflight(
                 sam2_state, run_mem_encoder=True
             )
-            for frame_idx, obj_ids_out, _low_res, video_res, *_ in demo_model.tracker.propagate_in_video(
-                sam2_state,
-                start_frame_idx=None,
-                max_frame_num_to_track=None,
-                reverse=False,
-            ):
-                # video_res: [n_obj, 1, H, W] float32 logits; >0 → foreground
-                binary = (video_res[:, 0] > 0.0).cpu().numpy()  # [n_obj, H, W] bool
+
+            # Start from the frame where this state was conditioned.
+            cond_frames = sam2_state["consolidated_frame_inds"]["cond_frame_outputs"]
+            start_frame = min(cond_frames) if cond_frames else 0
+
+            for frame_idx in range(start_frame, inference_state["num_frames"]):
+                # Populate feature_cache[frame_idx] (shared with sam2_state["cached_features"])
+                demo_model._prepare_backbone_feats(
+                    inference_state, frame_idx, reverse=False
+                )
+                # Propagate one frame through the SAM2 memory bank
+                obj_ids_local, low_res, _ = demo_model._propogate_tracker_one_frame_local_gpu(
+                    [sam2_state],
+                    frame_idx=frame_idx,
+                    reverse=False,
+                    run_mem_encoder=True,
+                )
+                if len(obj_ids_local) == 0:
+                    continue
+                # Upsample low-res logits → binary video-res masks
+                video_res = F.interpolate(
+                    low_res.unsqueeze(1).float(),  # [n, 1, H_low, W_low]
+                    size=(H_video, W_video),
+                    mode="bilinear",
+                    align_corners=False,
+                )  # [n, 1, H, W]
+                binary = (video_res[:, 0] > 0.0).cpu().numpy()  # [n, H, W] bool
                 frame_dict = per_frame_masks.setdefault(frame_idx, {})
-                for oid, mask in zip(obj_ids_out, binary):
+                for oid, mask in zip(obj_ids_local, binary):
                     frame_dict[str(oid)] = mask
 
-            # Release memory before processing next sub-state
             torch.cuda.empty_cache()
 
-        # Write NPZ files using a thread pool
+        # Write NPZ files (one per frame) with thread pool
         with ThreadPoolExecutor(max_workers=8) as executor:
             futures = [
                 executor.submit(
