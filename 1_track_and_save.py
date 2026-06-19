@@ -220,18 +220,16 @@ def run_sam31(args, device, frame_names, frame_names_stems, input_masks, objects
     SAM3.1 multiplex tracking with pixel-level mask prompts.
 
     Low-level path:
-      1. start_session  →  init_state (loads video frames, builds input_batch)
-      2. _prepare_backbone_feats  →  runs backbone+detector on annotation frame,
-         populates feature_cache[frame_idx] with SAM2-compatible features
-      3. _tracker_add_new_objects (first annotation frame)  →  creates SAM2 sub-states,
-         registers obj_ids, runs propagate_in_video_preflight (memory encoder)
-      4. tracker.add_new_masks (subsequent annotation frames)  →  adds conditioning
-         memory for already-registered objects on new frames
-      5. _init_backbone_out  →  runs text encoder, initialises backbone_out in state
-         (required by _run_single_frame_inference before propagation)
-      6. _build_tracker_metadata_31  →  fills tracker_metadata required by propagate_in_video
-      7. handle_stream_request("propagate_in_video")  →  yields per-frame outputs
-      8. close_session  →  gc.collect + torch.cuda.empty_cache
+      1. parse masks  →  count objects, determine max_num_objects
+      2. build predictor with max_num_objects set accordingly
+      3. init_state  →  loads video frames, builds input_batch
+      4. _prepare_backbone_feats  →  runs backbone+detector on annotation frame
+      5. _tracker_add_new_objects (per first-annotated-frame group)  →  creates SAM2
+         sub-states, registers obj_ids, runs propagate_in_video_preflight
+      6. _init_backbone_out  →  runs text encoder, initialises backbone_out in state
+      7. _build_tracker_metadata_31  →  fills tracker_metadata required by propagate_in_video
+      8. handle_stream_request("propagate_in_video")  →  yields per-frame outputs
+      9. close_session  →  gc.collect + torch.cuda.empty_cache
     """
     import uuid
     from sam3.model_builder import build_sam3_predictor
@@ -240,6 +238,41 @@ def run_sam31(args, device, frame_names, frame_names_stems, input_masks, objects
     if not os.path.isfile(ckpt):
         print(f"[SAM3.1] checkpoint not found at {ckpt!r}, downloading from HuggingFace…")
         ckpt = None
+
+    input_path = Path(args.inputs)
+
+    # ── 1. Parse annotation frames first (needed to set max_num_objects) ──
+    # frame_to_masks : {frame_idx: {obj_id: mask_np [H, W] bool}}
+    frame_to_masks = {}
+    for mask_path in input_masks:
+        mask_image = cv2.imread(str(mask_path))
+        mask_image = cv2.cvtColor(mask_image, cv2.COLOR_BGR2RGB)
+        stem = mask_path.stem
+        try:
+            frame_idx = frame_names_stems.index(stem)
+        except ValueError:
+            frame_idx = int(stem) if stem.isdigit() else int(stem.split('frame')[1])
+
+        frame_masks = {}
+        for obj_id, color in enumerate(objects):
+            mask_np = np.all(mask_image == color, axis=-1)
+            if mask_np.any():
+                frame_masks[obj_id] = mask_np
+        if frame_masks:
+            frame_to_masks[frame_idx] = frame_masks
+            print(f"Annotated frame {frame_idx}: {len(frame_masks)} objects")
+
+    all_obj_ids = sorted({oid for masks in frame_to_masks.values() for oid in masks})
+    if not all_obj_ids:
+        print("No annotated objects found – skipping SAM3.1 tracking.")
+        return
+
+    # ── 2. Build predictor with object-count-aware max_num_objects ────────
+    # Must exceed the number of annotated objects + headroom for detector
+    # detections during propagation. Round up to next multiple of 16.
+    min_needed = len(all_obj_ids)
+    max_num_objects = max(128, ((min_needed + 15) // 16) * 16)
+    print(f"  [SAM3.1] Building predictor with max_num_objects={max_num_objects} for {min_needed} annotated objects.")
 
     # use_rope_real=False matches the published sam3.1_multiplex.pt checkpoint format;
     # set True only when using a checkpoint trained with real-valued RoPE.
@@ -250,12 +283,11 @@ def run_sam31(args, device, frame_names, frame_names_stems, input_masks, objects
         use_fa3=False,          # set True only on H100/H200 with FA3 installed
         use_rope_real=False,
         async_loading_frames=True,
+        max_num_objects=max_num_objects,
     )
     demo_model = predictor.model   # Sam3MultiplexTrackingWithInteractivity
 
-    input_path = Path(args.inputs)
-
-    # ── 1. Init state directly (bypasses Sam3BasePredictor.start_session which
+    # ── 3. Init state directly (bypasses Sam3BasePredictor.start_session which
     #        always forwards offload_state_to_cpu, a kwarg Sam3MultiplexTracking
     #        does not accept) ────────────────────────────────────────────────
     inference_state = demo_model.init_state(
@@ -272,31 +304,6 @@ def run_sam31(args, device, frame_names, frame_names_stems, input_masks, objects
     }
 
     try:
-        # ── 2. Parse annotation frames ────────────────────────────────────
-        # frame_to_masks : {frame_idx: {obj_id: mask_np [H, W] bool}}
-        frame_to_masks = {}
-        for mask_path in input_masks:
-            mask_image = cv2.imread(str(mask_path))
-            mask_image = cv2.cvtColor(mask_image, cv2.COLOR_BGR2RGB)
-            stem = mask_path.stem
-            try:
-                frame_idx = frame_names_stems.index(stem)
-            except ValueError:
-                frame_idx = int(stem) if stem.isdigit() else int(stem.split('frame')[1])
-
-            frame_masks = {}
-            for obj_id, color in enumerate(objects):
-                mask_np = np.all(mask_image == color, axis=-1)
-                if mask_np.any():
-                    frame_masks[obj_id] = mask_np
-            if frame_masks:
-                frame_to_masks[frame_idx] = frame_masks
-                print(f"Annotated frame {frame_idx}: {len(frame_masks)} objects")
-
-        all_obj_ids = sorted({oid for masks in frame_to_masks.values() for oid in masks})
-        if not all_obj_ids:
-            print("No annotated objects found – skipping SAM3.1 tracking.")
-            return
 
         # ── 3. Backbone features + mask registration ──────────────────────
         # Each object is initialised from its FIRST annotated frame.
