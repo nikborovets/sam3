@@ -1,0 +1,933 @@
+from sam3_batch_run import SAM3BatchProcessor
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+try:
+    from tg_notifier import notify_error, send_message
+except ImportError:
+    def notify_error(e, msg=""): print(f"Notifier not found: {msg} {e}")
+
+def fill_config(
+    video_path: str,
+    output_dir: str,
+    output_video_name: str,
+    prompts: list[str],
+    show_box: bool,
+    show_label: bool,
+    show_mask: bool,
+    show_original_image: bool,
+    save_frames: bool,
+    smart_merge: bool = True,
+    both_videos: bool = False
+) -> dict:
+    processor = SAM3BatchProcessor(video_path, output_dir)
+
+    all_outputs = {}
+    for prompt in prompts:
+        all_outputs[prompt] = processor.process_prompt(prompt)
+
+    merged = processor.merge_results(all_outputs, smart_merge=smart_merge)
+    
+    processor.visualize_merged(
+        merged, 
+        output_video_name=output_video_name,
+        show_box=show_box,
+        show_label=show_label,
+        show_mask=show_mask,
+        show_original_image=show_original_image,
+        save_frames=save_frames
+    )
+    if both_videos:
+        processor.visualize_merged(
+            merged, 
+            # output_video_name="merged_2-half-blind-no-light-day_3023_with_image.mp4",
+            # output_video_name="merged_2-half-blind-no-light-day_3023_no_image_without_overlap_artefacts.mp4",
+            # output_video_name="merged_2-half-blind-no-light-day_3023_no_im_test_artef.mp4",
+            output_video_name="merged_30_01_seq2_images_no_image_no_smart_merge.mp4",
+            show_box=show_box,
+            show_label=show_label,
+            show_mask=show_mask,
+            show_original_image=not show_original_image,
+            save_frames=not save_frames
+        )
+
+    return merged
+
+def run_config_1():
+    prompts = [
+        "chair", 
+        "table", 
+        "keyboard", 
+        "touchpad",
+        "mouse",
+        "usb hub",
+        "monitor",
+        "imac",
+        "wires",
+        "cushion",
+        "sofa",
+        "bin",
+        "screwdriver",
+        "window",
+        "window blind",
+        "door",
+        "door handle",
+        "floor",
+        "wall",
+        "ceiling",
+        "pipe",
+        "socket",
+        "plug",
+        "switch",
+        "column",
+        "concrete",
+    ]
+    merged = fill_config(
+        video_path="/workspace/ivan_images_slice",
+        output_dir="/workspace/sam3_batch_results",
+        output_video_name="merged_output_no_image.mp4",
+        prompts=prompts,
+        show_box=False,
+        show_label=False,
+        show_mask=True,
+        show_original_image=False,
+        save_frames=True)
+
+    print("Done!")
+    return merged
+
+def run_config_2():
+    # prompts = [
+    #     "table", 
+    #     "keyboard", 
+    #     "touchpad",
+    #     "mouse",
+    #     "usb adapter",
+    #     "wires",
+    #     "cushion",
+    #     "sofa",
+    #     "window",
+    #     "window blind",
+    #     "door",
+    #     "door handle",
+    #     "floor",
+    #     "wall",
+    #     "ceiling",
+    #     "socket",
+    #     "plug",
+    #     "switch",
+    #     "armrest",
+    #     "battery",
+    #     "wardrobe",
+    #     "cabinet wall",
+    #     "baseboard",
+    #     "glass",
+    #     "book",
+    #     "frame",
+    #     "cardboard boxes",
+    #     "shelves",
+    #     "helmet",
+    #     # "router",
+    #     "box",
+    #     "mug",
+    #     "paper",
+    #     "package",
+    #     "cabinet door",
+    #     "black thing",
+    #     "trash",
+    #     "blackboard",
+    # ]
+    prompts = [
+        # Архитектура и фон (Room Structure)
+        "wall",
+        "ceiling",
+        "floor",
+        "baseboard",
+        "window",
+        "door",
+        
+        # Элементы на стенах (Fixtures)
+        "socket",
+        "switch",
+        "light switch",
+        "window blind",
+        "door handle",
+        "blackboard",
+        "black plate",
+        "paperboard",
+
+
+        # Крупная мебель и ее части (Large Furniture)
+        "wardrobe",
+        "cabinet wall",
+        "shelves",
+        "cabinet door",
+        "glass",
+        "sofa",
+        "armrest",
+        "cushion",
+        "table",
+
+        # Предметы в шкафу/на полках (Objects on shelves/background)
+        "cardboard boxes",
+        "box",
+        "package",
+        "frame",
+        "book",
+        "helmet",
+        "mug",
+        "black thing",
+        "router box",
+        "inside of the cabinet",
+
+        # Предметы на столе/переднем плане (Objects on desk/foreground)
+        "computer keyboard",
+        "touchpad",
+        "mouse",
+        "usb adapter",
+        "wires",
+        "plug",
+        "battery",
+        "paper",
+    ]
+
+
+    merged = fill_config(
+        video_path="/workspace/ivan_images_slice2",
+        output_dir="/workspace/sam3_batch_results_2",
+        output_video_name="merged_output_with_image.mp4",
+        prompts=prompts,
+        show_box=False,
+        show_label=False,
+        show_mask=True,
+        show_original_image=True,
+        save_frames=True)
+
+    print("Done!")
+    return merged
+
+def run_big_config():
+    prompts = [
+        # --- Архитектура и фон (Room Structure) ---
+        "wall",
+        "ceiling",
+        "floor",
+        "baseboard",
+        "concrete",
+        "column",
+        "window",
+        "door",
+        "pipe",
+
+        # --- Элементы на стенах (Fixtures) ---
+        "socket",
+        "switch",
+        "light switch",
+        "window blind",
+        "door handle",
+        "blackboard",
+        "black plate",
+        "paperboard",
+
+        # --- Крупная мебель (Large Furniture) ---
+        "wardrobe",
+        "cabinet wall",
+        "shelves",
+        "cabinet door",
+        "glass",
+        "inside of the cabinet",
+        "sofa",
+        "armrest",
+        "cushion",
+        "chair",
+        "table",
+        "bin",
+
+        # --- Предметы в шкафу/на полках (Objects on shelves/background) ---
+        "cardboard boxes",
+        "box",
+        "router box",
+        "package",
+        "frame",
+        "book",
+        "helmet",
+        "mug",
+        "black thing",
+        
+        # --- Техника на столе ---
+        "monitor",
+        "imac",
+
+        # --- Мелкие предметы на столе/переднем плане (Objects on desk/foreground) ---
+        "keyboard",
+        "touchpad",
+        "mouse",
+        "usb adapter",
+        "wire",
+        "plug",
+        "battery",
+        "paper",
+        "screwdriver",
+    ]
+    merged = fill_config(
+        # video_path="/workspace/edited_color_and_edge_sharpness_every_3_frame_new",
+        video_path="/workspace/ivan_input_images",
+        output_dir="/workspace/sam3_batch_results_all_input_images_0",
+        output_video_name="merged_output_3023_all_input_no_image.mp4",
+        prompts=prompts,
+        show_box=False,
+        show_label=False,
+        show_mask=True,
+        show_original_image=False,
+        save_frames=True)
+    print("Done!")
+    return merged
+
+def run_music_room_config():
+    prompts = [
+        # # --- Архитектура и фон (Room Structure) ---
+        "wall",
+        "ceiling",
+        "floor",
+        "carpet",
+        "baseboard",
+        "concrete",
+        "column",
+        "door",
+        "pipe",
+        "illumination",
+        "radiator", # Радиатор отопления
+        "ventilation shaft", # Вентиляционные шахты
+        "ventilation pipe", # Вентиляционные трубы
+        "mosaic on the wall", # Мозаика на стене
+        "hexagon", # Шестиугольник
+        "mosaic of hexagons",
+        "black mosaic",
+        "shadow",
+
+        # --- Элементы на стенах (Fixtures) ---
+        "socket",
+        "switch",
+        "light switch",
+        "door handle",
+        "blackboard",
+        "paperboard",
+
+        # --- Крупная мебель (Large Furniture) ---
+        "wardrobe", # Шкаф
+        "cabinet wall",
+        "shelves",
+        "closet",
+        "cabinet door",
+        "glass",
+        "sofa",
+        "armrest",
+        "cushion",
+        "chair",
+        "table",
+        "bin", # Мусорное ведро
+        "trash can",
+        "water cooler", # Кулер водяной
+        "pouf", # Пуфики
+
+        # --- Музыкальное оборудование и инструменты (Musical Equipment) ---
+        "drums", # Барабаны
+        "cymbal", # Тарелки барабанные
+        "drumstick", # Палочки барабанные
+        "guitar", # Гитара
+        "ukulele", # Укулеле
+        "piano", # Пианино
+        "digital piano stand", # Стойка для пианино
+        "accordion", # Баян или аккордеон
+        "guitar amplifier", # Комбоусилитель
+        "guitar pedal", # Гитарная педаль
+        "mixing console", # Музыкальный пульт
+        "microphone stand", # Стойки для микрофонов
+        "tambourine", # Тамбурин
+        "bongo drum", # Бонго (ударный инструмент)
+        "guitar case", # Гитарный чехол
+        "instrument case", # Чехлы для инструментов
+
+        # --- Предметы в шкафу/на полках (Objects on shelves/background) ---
+        "cardboard box",
+        "box",
+        "package",
+        "frame",
+        "book",
+        "mug",
+        "bottle", # Бутылка
+        "bag", # Сумка
+        "plastic cup", # Пластиковые стаканчики
+
+        # --- Техника на столе ---
+        "monitor",
+        "imac",
+
+        # --- Мелкие предметы на столе/переднем плане (Objects on desk/foreground) ---
+        "keyboard",
+        "touchpad",
+        "usb adapter",
+        "wire",
+        "plug",
+        "battery",
+        "paper",
+        "object on the table",
+        "mixing console",
+    ]
+    # prompts = [
+    #     # # --- Архитектура и фон (Room Structure) ---
+    #     "wall",
+    #     "ceiling",
+    #     "floor",
+    #     "carpet",
+    #     "baseboard",
+    #     "concrete",
+    #     "column",
+    #     "door",
+    #     "pipe",
+    #     "illumination",
+    #     "radiator", # Радиатор отопления
+    #     "mosaic on the wall", # Мозаика на стене
+    #     # "hexagon", # Шестиугольник
+    #     "mosaic of hexagons",
+    #     "black mosaic",
+    #     # "shadow",
+    # ]
+
+    # merged = fill_config(
+    #     video_path="/workspace/music_room_input_3frames",
+    #     output_dir="/workspace/sam3_batch_results_music_room",
+    #     output_video_name="bb_label_image.mp4",
+    #     prompts=prompts,
+    #     show_box=True,
+    #     show_label=True,
+    #     show_mask=True,
+    #     show_original_image=True,
+    #     save_frames=True)
+    merged = fill_config(
+        video_path="/workspace/music_room_input_3frames",
+        output_dir="/workspace/sam3_batch_results_music_room",
+        output_video_name="merged_output_music_room_const_no_image_all6.mp4",
+        prompts=prompts,
+        show_box=False,
+        show_label=False,
+        show_mask=True,
+        show_original_image=False,
+        save_frames=True)
+    print("Done!")
+    return merged
+
+def run_config_seq1_2711():
+    prompts = [
+        # --- Архитектура и фон (Room Structure) ---
+        "wall",
+        "ceiling",
+        "floor",
+        "baseboard",
+        "concrete",
+        "column",
+        "window",
+        "door",
+        "pipe",
+        "ventilation shaft", # Вентиляционные шахты
+        "ventilation pipe", # Вентиляционные трубы
+        "illumination",
+        "air-conditioner",
+
+        # --- Элементы на стенах (Fixtures) ---
+        "socket",
+        "switch",
+        "light switch",
+        "window blind",
+        "door handle",
+        "blackboard",
+        "black plate",
+        "paperboard",
+        "router box",
+
+        # --- Крупная мебель (Large Furniture) ---
+        "desk wall",
+        "wardrobe",
+        "cabinet",
+        "office cabinet",
+        "cabinet wall",
+        "shelves",
+        "cabinet door",
+        "glass",
+        "inside of the cabinet",
+        "sofa",
+        "armrest",
+        "cushion",
+        "chair",
+        "table",
+        "bin",
+        "PC",
+        "computer",
+        "skateboard",
+        "backpack",
+        "camping chair",
+
+        # --- Предметы в шкафу/на полках (Objects on shelves/background) ---
+        "quadcopter",
+        "drone",
+        "cardboard boxes",
+        "box",
+        "router box",
+        "package",
+        "frame",
+        "book",
+        "helmet",
+        "mug",
+        "bottle",
+        "black thing",
+        
+        # --- Техника на столе ---
+        "monitor",
+        "imac",
+        "laptop",
+
+        # --- Мелкие предметы на столе/переднем плане (Objects on desk/foreground) ---
+        "keyboard",
+        "touchpad",
+        "mouse",
+        "usb adapter",
+        "wire",
+        "plug",
+        "battery",
+        "paper",
+        "object on the table",
+        "screwdriver",
+    ]
+    merged = fill_config(
+        # video_path="/workspace/edited_color_and_edge_sharpness_every_3_frame_new",
+        video_path="/workspace/seq1_2711_input_every_3_frame",
+        output_dir="/workspace/sam3_batch_results_seq1_2711",
+        output_video_name="merged_output_seq1_2711_no_image.mp4",
+        prompts=prompts,
+        show_box=False,
+        show_label=False,
+        show_mask=True,
+        show_original_image=False,
+        save_frames=True)
+    print("Done!")
+    return merged
+
+def run_3023_16_01_2026_config():
+    prompts = [
+        # --- Архитектура и фон (Room Structure) ---
+        "wall",
+        "ceiling",
+        "illumination",
+        "floor",
+        "baseboard",
+        "concrete",
+        "column",
+        "window",
+        "door",
+        "pipe",
+        # "radiator",
+        "ventilation",
+
+        # --- Элементы на стенах (Fixtures) ---
+        "socket",
+        "switch",
+        "light switch",
+        "window blind",
+        "door handle",
+        "blackboard",
+        "black plate",
+        "paperboard",
+
+        # --- Крупная мебель (Large Furniture) ---
+        "cabinet",
+        "wardrobe",
+        "cabinet wall",
+        "shelves",
+        "cabinet door",
+        "glass",
+        "inside of the cabinet",
+        "sofa",
+        "armrest",
+        "cushion",
+        "chair",
+        "table",
+        "bin",
+
+        # --- Предметы в шкафу/на полках (Objects on shelves/background) ---
+        "cardboard boxes",
+        "box",
+        "router box",
+        "package",
+        "frame",
+        "book",
+        "helmet",
+        "vase",
+        "mug",
+        "black thing",
+        "statuette",
+        "backpack",
+        "pump",
+        
+        # --- Техника на столе ---
+        "monitor",
+        "imac",
+
+        # --- Мелкие предметы на столе/переднем плане (Objects on desk/foreground) ---
+        "keyboard",
+        "touchpad",
+        "mouse",
+        "usb adapter",
+        "wire",
+        "plug",
+        "battery",
+        "paper",
+        "screwdriver",
+    ]
+
+    merged = fill_config(
+        # video_path="/workspace/edited_color_and_edge_sharpness_every_3_frame_new",
+        video_path="/workspace/2-half-blind-no-light-day_e3f",
+        output_dir="/workspace/sam3_batch_results_3023_16_01_2026",
+        output_video_name="merged_2-half-blind-no-light-day_3023_no_image.mp4",
+        prompts=prompts,
+        show_box=False,
+        show_label=False,
+        show_mask=True,
+        show_original_image=False,
+        save_frames=True
+        )
+    print("Done!")
+    return merged
+
+def test_run_without_overlap_artefacts():
+    prompts = [
+        "table",
+    ]
+    merged = fill_config(
+        # video_path="/workspace/edited_color_and_edge_sharpness_every_3_frame_new",
+        video_path="/workspace/2-half-blind-no-light-day_e3f",
+        output_dir="/workspace/sam3_batch_results_3023_16_01_2026_without_overlap_artefacts",
+        output_video_name="merged_2-half-blind-no-light-day_3023_with_image_without_overlap_artefacts.mp4",
+        prompts=prompts,
+        show_box=True,
+        show_label=True,
+        show_mask=True,
+        show_original_image=True,
+        save_frames=False,
+        both_videos=True
+        )
+    print("Done!")
+    return merged
+
+def run_3023_16_01_2026_config_without_overlap_artefacts():
+    # ALLOWED_PROMPTS = [
+    #         # --- Архитектура и фон (Room Structure) ---
+    #         "wall",
+    #         "ceiling",
+    #         "illumination",
+    #         "floor",
+    #         "baseboard",
+    #         "concrete",
+    #         "column",
+    #         "window",
+    #         "door",
+    #         "pipe",
+    #         # "radiator", # мусор, убрал ранее
+    #         "ventilation",
+
+    #         # --- Элементы на стенах (Fixtures) ---
+    #         "socket",
+    #         "switch",
+    #         "light switch",
+    #         "window blind",
+    #         "door handle",
+    #         "blackboard",
+    #         "black plate",
+    #         "paperboard", # мусор, в cvat увидел, TODO: объединить с box
+
+    #         # --- Крупная мебель (Large Furniture) ---
+    #         "cabinet",
+    #         # "wardrobe", # мусор, в cvat увидел (вообще нет его кажется)
+    #         # "cabinet wall", # мусор, в cvat увидел (вообще нет его кажется)
+    #         # "shelves", # необязательно
+    #         # "cabinet door", # мусор, в cvat увидел, TODO: объединить с cabinet
+    #         "glass",
+    #         # "inside of the cabinet", # мусор, в cvat увидел, TODO: объединить с cabinet
+    #         "sofa",
+    #         # "armrest", # необязательно
+    #         # "cushion", # необязательно
+    #         "chair",
+    #         "table",
+    #         "bin",
+
+    #         # --- Предметы в шкафу/на полках (Objects on shelves/background) ---
+    #         # "cardboard boxes", # мусор, в cvat увидел, TODO: объединить с box
+    #         "box",
+    #         # "router box", # мусор, в cvat увидел, TODO: объединить с box
+    #         # "package", # мусор, в cvat увидел, TODO: объединить с box
+    #         "frame",
+    #         "book",
+    #         "helmet",
+    #         # "vase", # добавлено через mask prompt
+    #         "mug",
+    #         # "black thing", # мусор, в cvat увидел (вообще нет его кажется)
+    #         # "statuette", # добавлено через mask prompt
+    #         "backpack",
+    #         # "pump", # добавлено через mask prompt
+            
+    #         # --- Техника на столе ---
+    #         "monitor",
+    #         "imac",
+
+    #         # --- Мелкие предметы на столе/переднем плане (Objects on desk/foreground) ---
+    #         "keyboard",
+    #         # "touchpad", # мусор, в cvat увидел, TODO: объединить с keyboard
+    #         "mouse",
+    #         # "usb adapter", # мусор, в cvat увидел (вообще нет его кажется)
+    #         "wire",
+    #         # "plug", # мусор, в cvat увидел (вообще нет его кажется)
+    #         # "battery", # мусор, в cvat увидел (вообще нет его кажется)
+    #         "paper",
+    #         # "screwdriver", # мусор, в cvat увидел (вообще нет его кажется)
+    #     ]
+    ALLOWED_PROMPTS = [
+        "wall",
+        "floor",
+        "table",
+    ]
+    merged = fill_config(
+        video_path="/workspace/2-half-blind-no-light-day_e3f",
+        output_dir="/workspace/sam3_batch_results_3023_16_01_2026_without_overlap_artefacts_all_text",
+        # output_video_name="merged_2-half-blind-no-light-day_3023_w_im_test_artef_new_overlap_probs.mp4",
+        output_video_name="wall_floor_table_only_no_smart_merge.mp4",
+        prompts=ALLOWED_PROMPTS,
+        show_box=True,
+        show_label=True,
+        show_mask=True,
+        show_original_image=True,
+        save_frames=False,
+        smart_merge=False,
+        # both_videos=True
+    )
+    print("Done!")
+    return merged
+
+def separate_videos_by_prompts():
+    ALLOWED_PROMPTS = [
+            # --- Архитектура и фон (Room Structure) ---
+            "wall",
+            "ceiling",
+            "illumination",
+            "floor",
+            "baseboard",
+            # "concrete",
+            "column",
+            "window",
+            "door",
+            # "pipe",
+            # "radiator", # мусор, убрал ранее
+            "ventilation",
+
+            # --- Элементы на стенах (Fixtures) ---
+            "socket",
+            "switch",
+            "light switch",
+            "window blind",
+            "door handle",
+            "blackboard",
+            # "black plate",
+            # "paperboard", # мусор, в cvat увидел, TODO: объединить с box
+
+            # --- Крупная мебель (Large Furniture) ---
+            "cabinet",
+            # "wardrobe", # мусор, в cvat увидел (вообще нет его кажется)
+            # "cabinet wall", # мусор, в cvat увидел (вообще нет его кажется)
+            # "shelves", # необязательно
+            # "cabinet door", # мусор, в cvat увидел, TODO: объединить с cabinet
+            "glass",
+            # "inside of the cabinet", # мусор, в cvat увидел, TODO: объединить с cabinet
+            "sofa",
+            # "armrest", # необязательно
+            # "cushion", # необязательно
+            "chair",
+            "table",
+            "bin",
+
+            # --- Предметы в шкафу/на полках (Objects on shelves/background) ---
+            "lamp",
+            # "cardboard boxes", # мусор, в cvat увидел, TODO: объединить с box
+            "box",
+            # "router box", # мусор, в cvat увидел, TODO: объединить с box
+            # "package", # мусор, в cvat увидел, TODO: объединить с box
+            "frame",
+            "book",
+            "helmet",
+            # "vase", # добавлено через mask prompt
+            "mug",
+            # "black thing", # мусор, в cvat увидел (вообще нет его кажется)
+            # "statuette", # добавлено через mask prompt
+            "backpack",
+            # "pump", # добавлено через mask prompt
+            
+            # --- Техника на столе ---
+            "monitor",
+            "imac",
+
+            # --- Мелкие предметы на столе/переднем плане (Objects on desk/foreground) ---
+            "keyboard",
+            # "touchpad", # мусор, в cvat увидел, TODO: объединить с keyboard
+            "mouse",
+            # "usb adapter", # мусор, в cvat увидел (вообще нет его кажется)
+            "wire",
+            # "plug", # мусор, в cvat увидел (вообще нет его кажется)
+            # "battery", # мусор, в cvat увидел (вообще нет его кажется)
+            "paper",
+            # "screwdriver", # мусор, в cvat увидел (вообще нет его кажется)
+        ]
+    missed_prompts = [
+        "light switch",
+        "window blind",
+        "door handle",
+    ]
+    idxs = [ALLOWED_PROMPTS.index(prompt) for prompt in missed_prompts]
+    for idx in idxs:
+        prompt = ALLOWED_PROMPTS[idx]
+        # merged = fill_config(
+        #     video_path="/workspace/2-half-blind-no-light-day_e3f",
+        #     output_dir="/workspace/sam3_batch_results_3023_16_01_2026_without_overlap_artefacts_all_text",
+        #     # output_video_name="merged_2-half-blind-no-light-day_3023_w_im_test_artef_new_overlap_probs.mp4",
+        #     output_video_name=f"{prompt}_only_no_smart_merge.mp4",
+        #     prompts=[prompt,],
+        #     show_box=True,
+        #     show_label=True,
+        #     show_mask=True,
+        #     show_original_image=True,
+        #     save_frames=False,
+        #     smart_merge=False,
+        #     # both_videos=True
+        # )
+        safe_prompt = prompt.replace(" ", "_")
+        merged = fill_config(
+            video_path="/workspace/30_01_seq2_images",
+            # output_dir="/workspace/sam3_batch_results_30_01_seq2_images_without_overlap_artefacts_all_text",
+            output_dir="/workspace/sam3_batch_results_30_01_seq2_images_without_overlap_artefacts_all_text_1chunk",
+            # output_video_name="merged_2-half-blind-no-light-day_3023_w_im_test_artef_new_overlap_probs.mp4",
+            output_video_name=f"{idx}_{safe_prompt}_only_no_smart_merge.mp4",
+            prompts=[prompt,],
+            show_box=True,
+            show_label=True,
+            show_mask=True,
+            show_original_image=True,
+            save_frames=False,
+            smart_merge=False,
+            # both_videos=True
+        )
+    print("Done!")
+    return merged
+
+def run_30_01_seq2_images_config():
+    ALLOWED_PROMPTS = [
+            # --- Архитектура и фон (Room Structure) ---
+            "wall",
+            "ceiling",
+            "illumination",
+            "floor",
+            "baseboard",
+            # "concrete",
+            "column",
+            "window",
+            "door",
+            # "pipe",
+            # "radiator", # мусор, убрал ранее
+            "ventilation",
+
+            # --- Элементы на стенах (Fixtures) ---
+            "socket",
+            "switch",
+            "light switch",
+            "window blind",
+            "door handle",
+            "blackboard",
+            # "black plate",
+            # "paperboard", # мусор, в cvat увидел, TODO: объединить с box
+
+            # --- Крупная мебель (Large Furniture) ---
+            "cabinet",
+            # "wardrobe", # мусор, в cvat увидел (вообще нет его кажется)
+            # "cabinet wall", # мусор, в cvat увидел (вообще нет его кажется)
+            # "shelves", # необязательно
+            # "cabinet door", # мусор, в cvat увидел, TODO: объединить с cabinet
+            "glass",
+            # "inside of the cabinet", # мусор, в cvat увидел, TODO: объединить с cabinet
+            "sofa",
+            # "armrest", # необязательно
+            # "cushion", # необязательно
+            "chair",
+            "table",
+            "bin",
+
+            # --- Предметы в шкафу/на полках (Objects on shelves/background) ---
+            "lamp",
+            # "cardboard boxes", # мусор, в cvat увидел, TODO: объединить с box
+            "box",
+            # "router box", # мусор, в cvat увидел, TODO: объединить с box
+            # "package", # мусор, в cvat увидел, TODO: объединить с box
+            "frame",
+            "book",
+            "helmet",
+            # "vase", # добавлено через mask prompt
+            "mug",
+            # "black thing", # мусор, в cvat увидел (вообще нет его кажется)
+            # "statuette", # добавлено через mask prompt
+            "backpack",
+            # "pump", # добавлено через mask prompt
+            
+            # --- Техника на столе ---
+            "monitor",
+            "imac",
+
+            # --- Мелкие предметы на столе/переднем плане (Objects on desk/foreground) ---
+            "keyboard",
+            # "touchpad", # мусор, в cvat увидел, TODO: объединить с keyboard
+            "mouse",
+            # "usb adapter", # мусор, в cvat увидел (вообще нет его кажется)
+            "wire",
+            # "plug", # мусор, в cvat увидел (вообще нет его кажется)
+            # "battery", # мусор, в cvat увидел (вообще нет его кажется)
+            "paper",
+            # "screwdriver", # мусор, в cvat увидел (вообще нет его кажется)
+        ]
+    merged = fill_config(
+        video_path="/workspace/30_01_seq2_images",
+        output_dir="/workspace/sam3_batch_results_30_01_seq2_images_without_overlap_artefacts_all_text_1chunk",
+        # output_video_name="merged_2-half-blind-no-light-day_3023_w_im_test_artef_new_overlap_probs.mp4",
+        output_video_name="merged_30_01_seq2_images_with_image_no_smart_merge.mp4",
+        prompts=ALLOWED_PROMPTS,
+        show_box=True,
+        show_label=True,
+        show_mask=True,
+        show_original_image=True,
+        save_frames=False,
+        smart_merge=False,
+        both_videos=True
+    )
+    print("Done!")
+    return merged
+
+if __name__ == "__main__":
+    try:
+        send_message("Batch run started")
+        # run_config_1()
+        # run_config_2()
+        # run_big_config()
+        # run_music_room_config()
+        # run_config_seq1_2711()
+        # run_3023_16_01_2026_config()
+        # test_run_without_overlap_artefacts()
+        # run_3023_16_01_2026_config_without_overlap_artefacts()
+        separate_videos_by_prompts()
+        # run_30_01_seq2_images_config()
+        send_message("Batch run completed successfully")
+    except Exception as e:
+        notify_error(e, "Критическая ошибка при выполнении batch_run_configs.py")
+        raise

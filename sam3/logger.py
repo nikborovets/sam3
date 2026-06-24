@@ -49,8 +49,21 @@ def get_logger(name, level=logging.INFO):
     logger = logging.getLogger(name)
     logger.setLevel(level)
     logger.propagate = False
+    
+    # Stream Handler (Console)
     ch = logging.StreamHandler()
     ch.setLevel(level)
     ch.setFormatter(ColoredFormatter())
     logger.addHandler(ch)
+    
+    # File Handler
+    # Use a fixed log file name or environment variable
+    log_file = os.environ.get("SAM3_LOG_FILE", "sam3.log")
+    fh = logging.FileHandler(log_file)
+    fh.setLevel(level)
+    # File formatter without colors
+    file_fmt = logging.Formatter("%(asctime)s - %(levelname)s - %(process)d - %(filename)s:%(lineno)d - %(message)s")
+    fh.setFormatter(file_fmt)
+    logger.addHandler(fh)
+    
     return logger
